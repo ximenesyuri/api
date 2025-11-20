@@ -1,0 +1,24 @@
+[project]
+name = "api"
+version = "0.0.0"
+description = "A starlette based API constructor, focused in type safety"
+readme = "README.md"
+requires-python = ">=3.9"
+license = {text = "BSD"}
+authors = [
+    {name = "Yuri Ximenes", email = "ximenesyuri@gmx.ie"},
+]
+dependencies = [
+    "starlette",
+    "uvicorn",
+    "typed @ git+https://github.com/ximenesyuri/typed",
+]
+
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["api*"]
+

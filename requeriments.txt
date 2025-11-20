@@ -1,0 +1,3 @@
+starlette
+uvicorn
+git+https://github.com/ximenesyuri/typed
