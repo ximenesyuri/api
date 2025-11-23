@@ -1,6 +1,6 @@
 from typed import Function, Any, Str, Maybe, Path, List
 from api.mods.helper import _unwrap
-from api.mods.models import Middleware
+from api.mods.mids import Middleware
 
 class Route:
     def __init__(self: Any, method: Str, path: Path, func: Function, name: Maybe(Str)=None, mids: List(Middleware)=None):

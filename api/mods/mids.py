@@ -1,7 +1,6 @@
-from typed import model, Enum, Str, Int, Nat
+from typed import model, Enum, Str, Int, Nat, List
 
 AuthType = Enum(Str, 'token', 'basic')
-BlockReason = Enum(Str, 'auth')
 
 @model
 class Middleware:
@@ -13,7 +12,7 @@ class Auth(Middleware):
 
 @model
 class Block(Middleware):
-    reason: BlockReason='auth'
+    codes: List(Nat)=[]
     attempts: Nat=3
     interval: Nat=30
     block_minutes: Int=-1

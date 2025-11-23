@@ -19,6 +19,22 @@ from typed.mods.helper.helper import (
 blocked_ips = {}
 
 _auth_failures = {}
+_ROUTER_CLASS = None
+_api_name = None
+
+def _set_api_name(name: Str) -> None:
+    global _api_name
+    _api_name = name
+
+def _get_router_class():
+    global _ROUTER_CLASS
+    if _ROUTER_CLASS is None:
+        try:
+            from api.mods.router import Router as _R
+            _ROUTER_CLASS = _R
+        except Exception:
+            _ROUTER_CLASS = object
+    return _ROUTER_CLASS
 
 def _unwrap(func):
     f = func
@@ -219,25 +235,15 @@ async def _build_kwargs(func: Function, request: Request) -> Dict:
 
     return kw
 
-def _enforce_ip_block(request: Request, mids, auth_failed: bool = False) -> None:
-    """
-    IP blocking enforcement.
-
-    - If `mids` contains a Block(reason='auth') middleware:
-      * On every request, we first check whether the client IP is already
-        blocked and, if so, reject it with the Block.message.
-      * When `auth_failed` is True, we record a failed authentication attempt
-        and, if it exceeds the configured attempts within interval seconds,
-        we block the IP for block_minutes minutes (or forever if < 0).
-    """
-    from api.mods.models import Block
+def _enforce_ip_block(request: Request, mids, status_code: int | None = None) -> None:
+    from api.mods.mids import Block
 
     if not mids:
         return
 
     block_mid = None
     for m in mids:
-        if isinstance(m, Block) and m.reason == "auth":
+        if isinstance(m, Block):
             block_mid = m
             break
 
@@ -259,7 +265,11 @@ def _enforce_ip_block(request: Request, mids, auth_failed: bool = False) -> None
             blocked_ips.pop(ip, None)
             _auth_failures.pop(ip, None)
 
-    if not auth_failed:
+    if status_code is None:
+        return
+
+    codes = getattr(block_mid, "codes", []) or []
+    if codes and status_code not in codes:
         return
 
     window_start = now - timedelta(seconds=int(block_mid.interval))
@@ -278,7 +288,7 @@ def _enforce_ip_block(request: Request, mids, auth_failed: bool = False) -> None
         blocked_ips[ip] = {
             "blocked_until": blocked_until,
             "message": block_mid.message,
-            "reason": block_mid.reason,
+            "reason": getattr(block_mid, "reason", None),
         }
         _auth_failures.pop(ip, None)
 
@@ -288,7 +298,7 @@ def _enforce_ip_block(request: Request, mids, auth_failed: bool = False) -> None
         )
 
 def _enforce_token_auth(request: Request, mids) -> None:
-    from api.mods.models import Auth, Token
+    from api.mods.mids import Auth, Token
 
     if not mids:
         return
@@ -319,8 +329,6 @@ def _enforce_token_auth(request: Request, mids) -> None:
             got = request.query_params.get("token")
 
         if not got or got != expected:
-            _enforce_ip_block(request, mids, auth_failed=True)
-
             raise StarletteHTTPException(
                 status_code=401,
                 detail="Unauthorized",
@@ -329,6 +337,7 @@ def _enforce_token_auth(request: Request, mids) -> None:
         return
 
     raise StarletteHTTPException(status_code=500, detail="Unsupported authentication type")
+
 
 def _make_handler(func: Function, method: Str, mids=None) -> Function:
     original = _unwrap(func)
@@ -340,18 +349,13 @@ def _make_handler(func: Function, method: Str, mids=None) -> Function:
 
     expected_domain = _hinted_domain(original)
     expected_codomain = _hinted_codomain(original)
-
     is_async = inspect.iscoroutinefunction(original)
 
     async def handler(request: Request) -> Response:
         try:
             if mids:
-                from api.mods.models import Block, Auth
-                if any(isinstance(m, Block) for m in mids):
-                    _enforce_ip_block(request, mids, auth_failed=False)
-
-                if any(isinstance(m, Auth) for m in mids):
-                    _enforce_token_auth(request, mids)
+                _enforce_ip_block(request, mids, status_code=None)
+                _enforce_token_auth(request, mids)
 
             kw = await _build_kwargs(original, request)
             args_list = [kw[name] for name in param_names if name in kw]
@@ -365,13 +369,24 @@ def _make_handler(func: Function, method: Str, mids=None) -> Function:
 
             _check_codomain(original, expected_codomain, TYPE(result), result, param_value_map=kw)
 
-            return _to_response(result)
+            response = _to_response(result)
 
-        except StarletteHTTPException:
+            if mids:
+                _enforce_ip_block(request, mids, status_code=response.status_code)
+
+            return response
+
+        except StarletteHTTPException as exc:
+            if mids:
+                _enforce_ip_block(request, mids, status_code=exc.status_code)
             raise
         except TypeError:
+            if mids:
+                _enforce_ip_block(request, mids, status_code=422)
             raise
         except Exception:
+            if mids:
+                _enforce_ip_block(request, mids, status_code=500)
             raise
 
     return handler
