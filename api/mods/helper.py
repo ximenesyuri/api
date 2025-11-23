@@ -1,6 +1,7 @@
 import os
 import sys
 import inspect
+from datetime import datetime, timedelta
 import json
 from typing import get_type_hints
 from starlette.requests import Request
@@ -14,6 +15,10 @@ from typed.mods.helper.helper import (
     _check_domain,
     _check_codomain,
 )
+
+blocked_ips = {}
+
+_auth_failures = {}
 
 def _unwrap(func):
     f = func
@@ -83,16 +88,13 @@ def _parse_query_value(name: str, ann, request) -> Any:
 
     if len(vals) == 1:
         v = vals[0]
-        # If JSON-looking -> parse JSON (object or array)
         j = _parse_json_maybe(v)
         if j is not v:
             return _maybe_cast_sequence_to_target(j, ann)
-        # CSV fallback
         if "," in v:
             parts = [p for p in v.split(",")]
             parsed = [_parse_literal(p) for p in parts]
             return _maybe_cast_sequence_to_target(parsed, ann)
-        # Simple scalar
         return _parse_literal(v)
 
     return None
@@ -203,9 +205,8 @@ async def _build_kwargs(func: Function, request: Request) -> Dict:
             if getattr(ann, "is_model", False):
                 if not isinstance(body_value, dict):
                     raise TypeError(f"Body for '{name}' must be a JSON object for model '{getattr(ann, '__name__', str(ann))}'")
-                # typed.validation ensures dict conforms to model; instantiating constructs model instance
                 from typed.mods.models import validate as typed_validate
-                entity = typed_validate(body_value, ann)  # raises TypeError on mismatch
+                entity = typed_validate(body_value, ann)
                 kw[name] = ann(**entity)
             else:
                 kw[name] = body_value
@@ -218,15 +219,91 @@ async def _build_kwargs(func: Function, request: Request) -> Dict:
 
     return kw
 
-def _enforce_auth(request: Request, auth_model: Any) -> None:
-    from api.mods.models import Token
-    try:
-        is_token = isinstance(auth_model, Token)
-    except Exception:
-        is_token = False
+def _enforce_ip_block(request: Request, mids, auth_failed: bool = False) -> None:
+    """
+    IP blocking enforcement.
 
-    if is_token:
-        expected = auth_model.token
+    - If `mids` contains a Block(reason='auth') middleware:
+      * On every request, we first check whether the client IP is already
+        blocked and, if so, reject it with the Block.message.
+      * When `auth_failed` is True, we record a failed authentication attempt
+        and, if it exceeds the configured attempts within interval seconds,
+        we block the IP for block_minutes minutes (or forever if < 0).
+    """
+    from api.mods.models import Block
+
+    if not mids:
+        return
+
+    block_mid = None
+    for m in mids:
+        if isinstance(m, Block) and m.reason == "auth":
+            block_mid = m
+            break
+
+    if block_mid is None:
+        return
+
+    ip = (request.client.host if request.client else None) or "unknown"
+    now = datetime.now()
+
+    info = blocked_ips.get(ip)
+    if info is not None:
+        blocked_until = info.get("blocked_until")
+        if blocked_until is None or blocked_until > now:
+            raise StarletteHTTPException(
+                status_code=403,
+                detail=info.get("message", block_mid.message),
+            )
+        else:
+            blocked_ips.pop(ip, None)
+            _auth_failures.pop(ip, None)
+
+    if not auth_failed:
+        return
+
+    window_start = now - timedelta(seconds=int(block_mid.interval))
+    failures = _auth_failures.setdefault(ip, [])
+    failures[:] = [t for t in failures if t >= window_start]
+    failures.append(now)
+
+    if len(failures) >= int(block_mid.attempts):
+        if block_mid.block_minutes < 0:
+            blocked_until = None
+        elif block_mid.block_minutes == 0:
+            blocked_until = now
+        else:
+            blocked_until = now + timedelta(minutes=int(block_mid.block_minutes))
+
+        blocked_ips[ip] = {
+            "blocked_until": blocked_until,
+            "message": block_mid.message,
+            "reason": block_mid.reason,
+        }
+        _auth_failures.pop(ip, None)
+
+        raise StarletteHTTPException(
+            status_code=403,
+            detail=block_mid.message,
+        )
+
+def _enforce_token_auth(request: Request, mids) -> None:
+    from api.mods.models import Auth, Token
+
+    if not mids:
+        return
+
+    auth_mid = None
+    for m in mids:
+        if isinstance(m, Auth):
+            auth_mid = m
+            break
+
+    if auth_mid is None:
+        return
+
+    if isinstance(auth_mid, Token):
+        expected = auth_mid.token
 
         got = None
         auth_header = request.headers.get("authorization")
@@ -242,6 +319,8 @@ def _enforce_auth(request: Request, auth_model: Any) -> None:
             got = request.query_params.get("token")
 
         if not got or got != expected:
+            _enforce_ip_block(request, mids, auth_failed=True)
+
             raise StarletteHTTPException(
                 status_code=401,
                 detail="Unauthorized",
@@ -249,10 +328,9 @@ def _enforce_auth(request: Request, auth_model: Any) -> None:
             )
         return
 
-    # Unknown/unsupported auth model type
     raise StarletteHTTPException(status_code=500, detail="Unsupported authentication type")
 
-def _make_handler(func: Function, method: Str, auth=None) -> Function:
+def _make_handler(func: Function, method: Str, mids=None) -> Function:
     original = _unwrap(func)
     sig = inspect.signature(original)
     param_names = [
@@ -260,7 +338,6 @@ def _make_handler(func: Function, method: Str, auth=None) -> Function:
         if p.kind in (p.POSITIONAL_ONLY, p.POSITIONAL_OR_KEYWORD, p.KEYWORD_ONLY)
     ]
 
-    # typed expected types based on hints
     expected_domain = _hinted_domain(original)
     expected_codomain = _hinted_codomain(original)
 
@@ -268,17 +345,19 @@ def _make_handler(func: Function, method: Str, auth=None) -> Function:
 
     async def handler(request: Request) -> Response:
         try:
-            if auth is not None:
-                _enforce_auth(request, auth)
+            if mids:
+                from api.mods.models import Block, Auth
+                if any(isinstance(m, Block) for m in mids):
+                    _enforce_ip_block(request, mids, auth_failed=False)
+
+                if any(isinstance(m, Auth) for m in mids):
+                    _enforce_token_auth(request, mids)
 
             kw = await _build_kwargs(original, request)
-            # Build args list for typed's _check_domain in signature order
             args_list = [kw[name] for name in param_names if name in kw]
 
-            # Domain validation via typed
             _check_domain(original, param_names, expected_domain, None, args_list)
 
-            # Call endpoint (async/sync)
             if is_async:
                 result = await original(**kw)
             else:
@@ -305,7 +384,6 @@ def _import_string(self) -> str:
     caller_file = g.get("__file__", None)
 
     var_name = None
-    print(g)
     for k, v in g.items():
         if v is self:
             var_name = k

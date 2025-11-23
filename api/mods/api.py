@@ -4,16 +4,16 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, PlainTextResponse
 from starlette.routing import Route as _Route
 from starlette.exceptions import HTTPException as StarletteHTTPException
-from typed import Function, Str, Maybe, Bool, Path
+from typed import Str, List, Maybe, Bool, Path
 from api.mods.router import Router
-from api.mods.models import Auth
+from api.mods.models import Middleware
 
 class API:
-    def __init__(self, name: Str="api", debug: Bool=False, auth: Maybe(Auth)=None):
+    def __init__(self, name: Str="api", debug: Bool=False, mids: List(Middleware)=None):
         self.name = name
         self.debug = debug
         self._starlette = Starlette(debug=debug)
-        self.auth = auth
+        self.mids = mids
 
         self._logger = logging.getLogger(self.name or "api")
         if not self._logger.handlers:
@@ -42,7 +42,7 @@ class API:
             self._logger.exception("Unhandled error on %s %s", request.method, request.url.path)
             if self.debug:
                 return PlainTextResponse(str(exc), status_code=500)
-            return JSONResponse({"detail": "Internal Server Error"}, status_code=500) 
+            return JSONResponse({"detail": "Internal Server Error"}, status_code=500)
 
     def log(self, level, message: str, *args, **kwargs) -> None:
         if isinstance(level, str):
@@ -80,12 +80,12 @@ class API:
 
     def run(
         self,
-        host: str = "127.0.0.1",
-        port: int = 8000,
-        reload: bool = False,
-        workers: int = 1,
-        log_level: str = "info",
-        app_import_string: str | None = None,
+        host = "127.0.0.1",
+        port = 8000,
+        reload = False,
+        workers = 1,
+        log_level = "debug",
+        app_import_string = None,
         **uvicorn_kwargs,
     ):
         import uvicorn
@@ -123,49 +123,47 @@ class API:
 
         for r in router._routes:
             full_path = "".join([prefix, router.prefix, r.path]) or "/"
-            effective_auth = None
-            if r.auth is False:
-                effective_auth = None
-            elif r.auth is not None:
-                effective_auth = r.auth
-            elif router.auth is not None:
-                effective_auth = router.auth
+            effective_mids = None
+            if r.mids is not None:
+                effective_mids = r.mids
+            elif router.mids is not None:
+                effective_mids = router.mids
             else:
-                effective_auth = self.auth
+                effective_mids = self.mids
 
-            handler = _make_handler(r.func, r.method, auth=effective_auth)
+            handler = _make_handler(r.func, r.method, mids=effective_mids)
             route = _Route(full_path, handler, methods=[r.method], name=r.name)
             self._starlette.router.routes.append(route)
 
-    def route(self, method: Str, path: Path, name: Maybe(Str)=None, auth: Maybe(Auth)=None):
+    def route(self, method: Str, path: Path, name: Maybe(Str)=None, mids: List(Middleware)=None):
         from api.mods.helper import _make_handler, _unwrap
         if not path.startswith("/"):
             path = "/" + path
         def decorator(func):
-            effective_auth = self.auth if auth is None else (None if auth is False else auth)
-            handler = _make_handler(func, method, auth=effective_auth)
+            effective_mids = self.mids if mids is None else mids
+            handler = _make_handler(func, method, mids=effective_mids)
             route = _Route(path, handler, methods=[method.upper()], name=name or _unwrap(func).__name__)
             self._starlette.router.routes.append(route)
             return func
         return decorator
 
-    def get(self, path: Path, name: Maybe(Str)=None, auth: Maybe(Auth)=None):
-        return self.route("GET", path, name, auth)
+    def get(self, path: Path, name: Maybe(Str)=None, mids: List(Middleware)=None):
+        return self.route("GET", path, name, mids)
 
-    def post(self, path: Path, name: Maybe(Str)=None, auth: Maybe(Auth)=None):
-        return self.route("POST", path, name, auth)
+    def post(self, path: Path, name: Maybe(Str)=None, mids: List(Middleware)=None):
+        return self.route("POST", path, name, mids)
 
-    def put(self, path: Path, name: Maybe(Str)=None, auth: Maybe(Auth)=None):
-        return self.route("PUT", path, name, auth)
+    def put(self, path: Path, name: Maybe(Str)=None, mids: List(Middleware)=None):
+        return self.route("PUT", path, name, mids)
 
-    def patch(self, path: Path, name: Maybe(Str)=None, auth: Maybe(Auth)=None):
-        return self.route("PATCH", path, name, auth)
+    def patch(self, path: Path, name: Maybe(Str)=None, mids: List(Middleware)=None):
+        return self.route("PATCH", path, name, mids)
 
-    def delete(self, path: Path, name: Maybe(Str)=None, auth: Maybe(Auth)=None):
-        return self.route("DELETE", path, name, auth)
+    def delete(self, path: Path, name: Maybe(Str)=None, mids: List(Middleware)=None):
+        return self.route("DELETE", path, name, mids)
 
-    def options(self, path: Path, name: Maybe(Str)=None, auth: Maybe(Auth)=None):
-        return self.route("OPTIONS", path, name, auth)
+    def options(self, path: Path, name: Maybe(Str)=None, mids: List(Middleware)=None):
+        return self.route("OPTIONS", path, name, mids)
 
-    def head(self, path: Str, name: Maybe(Str)=None, auth: Maybe(Auth)=None):
-        return self.route("HEAD", path, name, auth) 
+    def head(self, path: Str, name: Maybe(Str)=None, mids: List(Middleware)=None):
+        return self.route("HEAD", path, name, mids)
