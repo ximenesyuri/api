@@ -44,7 +44,15 @@ class API:
                 log.warning(msg)
             else:
                 log.error(msg)
-            return JSONResponse({"detail": exc.detail}, status_code=exc.status_code)
+
+            used_handler = getattr(request.state, "_used_ip_block_handler", False)
+            if not used_handler and self.mids:
+                try:
+                    from api.mods.helper import _enforce_ip_block
+                    _enforce_ip_block(request, self.mids, status_code=exc.status_code)
+                except StarletteHTTPException as block_exc:
+                    return JSONResponse({"detail": block_exc.detail},
+                                        status_code=block_exc.status_code)
 
         @self._starlette.exception_handler(Exception)
         async def unhandled_handler(request: Request, exc: Exception):

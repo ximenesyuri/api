@@ -383,6 +383,8 @@ def _make_handler(func: Function, method: Str, mids=None) -> Function:
 
     async def handler(request: Request) -> Response:
         try:
+            setattr(request.state, "_used_ip_block_handler", True)
+
             if mids:
                 _enforce_ip_block(request, mids, status_code=None)
                 _enforce_token_auth(request, mids)
