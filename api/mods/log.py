@@ -63,7 +63,7 @@ class Logger:
     ) -> None:
         try:
             from api.mods.helper import _build_logger, _build_prefix
-            logger = _build_logger()
+            logger = _build_logger(API_LOGGER_NAME, Formatter())
             router = router_name or self._caller_router_name()
             prefix = _build_prefix(router)
             logger.log(level, prefix + message, *args, **kwargs)
