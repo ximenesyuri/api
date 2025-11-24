@@ -2,7 +2,7 @@ import logging
 import inspect
 from typed import Any, Str
 
-ROUTER_COL_WIDTH = 15
+ROUTER_COL_WIDTH = 11
 LOGGER_NAME = "api"
 
 class Formatter(logging.Formatter):
