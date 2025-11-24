@@ -7,7 +7,7 @@ from typed import typed, Nat, Str, Json
 Response.__display__ = 'Response'
 
 @typed
-def Success(code: Nat=200, message: Str="", data: Json={}) -> Response:
+def Success(message: Str, code: Nat=200, data: Json={}) -> Response:
     content = {
         "status": "success",
         "code": code,
@@ -23,7 +23,7 @@ def Success(code: Nat=200, message: Str="", data: Json={}) -> Response:
     )
 
 @typed
-def Failure(code: Nat, message: Str="", data: Json={}) -> Response:
+def Failure(message: Str, code: Nat, data: Json={}) -> Response:
     content = {
         "status": "failure",
         "code": code,
