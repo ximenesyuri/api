@@ -51,7 +51,7 @@ class API:
             log.error(f"Unhandled error on {request.method} {request.url.path}: {exc}")
             if self.debug:
                 return PlainTextResponse(str(exc), status_code=500)
-            return JSONResponse({"detail": "Internal Server Error"}, status_code=500) 
+            return JSONResponse({"detail": "Internal Server Error"}, status_code=500)
 
     async def __call__(self, scope, receive, send):
         await self._starlette(scope, receive, send)
