@@ -298,8 +298,23 @@ def _enforce_ip_block(request: Request, mids, status_code: int | None = None) ->
     if status_code is None:
         return
 
-    codes = getattr(block_mid, "codes", []) or []
-    if codes and status_code not in codes:
+    raw_codes = getattr(block_mid, "codes", None)
+
+    if raw_codes is None:
+        return
+
+    if isinstance(raw_codes, (list, tuple, set)):
+        codes = [int(c) for c in raw_codes]
+    else:
+        try:
+            codes = [int(c) for c in list(raw_codes)]
+        except TypeError:
+            codes = [int(raw_codes)]
+
+    if not codes:
+        return
+
+    if status_code not in codes:
         return
 
     window_start = now - timedelta(seconds=int(block_mid.interval))
