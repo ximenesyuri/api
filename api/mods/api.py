@@ -8,6 +8,7 @@ from typed import Str, List, Maybe, Bool, Path
 
 class API:
     def __init__(self, name: Str="api", debug: Bool=False, mids=None):
+        from api.mods.log import log
         try:
             self.name = name
             from api.mods.helper import _set_api_name
@@ -21,28 +22,33 @@ class API:
         self._logger = logging.getLogger(self.name or "api")
         if not self._logger.handlers:
             handler = logging.StreamHandler()
-            formatter = logging.Formatter("%(asctime)s %(levelname)s [%(name)s] %(message)s")
+            formatter = logging.Formatter(
+                "%(levelname)s: %(asctime)s [%(name)s] %(message)s"
+            )
             handler.setFormatter(formatter)
             self._logger.addHandler(handler)
         self._logger.setLevel(logging.DEBUG if debug else logging.INFO)
         self._logger.propagate = False
 
-        @self._starlette.exception_handler(StarletteHTTPException)
-        async def http_exc_handler(request: Request, exc: StarletteHTTPException):
-            if 400 <= exc.status_code < 500:
-                self.warn("HTTPException %s: %s %s -> %s", exc.status_code, request.method, request.url.path, exc.detail)
-            else:
-                self.error("HTTPException %s: %s %s -> %s", exc.status_code, request.method, request.url.path, exc.detail)
-            return JSONResponse({"detail": exc.detail}, status_code=exc.status_code)
-
         @self._starlette.exception_handler(TypeError)
         async def type_error_handler(request: Request, exc: TypeError):
-            self.warn("[client-side] Validation error (422) on %s %s: \n%s", request.method, request.url.path, exc)
+            log._client_warning(
+                f"Validation error (422) on {request.method} {request.url.path}: \n{exc}"
+            )
             return JSONResponse({"detail": str(exc)}, status_code=422)
+
+        @self._starlette.exception_handler(StarletteHTTPException)
+        async def http_exc_handler(request: Request, exc: StarletteHTTPException):
+            msg = f"HTTPException {exc.status_code}: {request.method} {request.url.path} -> {exc.detail}"
+            if 400 <= exc.status_code < 500:
+                log.warning(msg)
+            else:
+                log.error(msg)
+            return JSONResponse({"detail": exc.detail}, status_code=exc.status_code)
 
         @self._starlette.exception_handler(Exception)
         async def unhandled_handler(request: Request, exc: Exception):
-            self._logger.exception("Unhandled error on %s %s", request.method, request.url.path)
+            log.error(f"Unhandled error on {request.method} {request.url.path}: {exc}")
             if self.debug:
                 return PlainTextResponse(str(exc), status_code=500)
             return JSONResponse({"detail": "Internal Server Error"}, status_code=500) 

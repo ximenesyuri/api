@@ -2,78 +2,99 @@ import logging
 import inspect
 from typed import Any, Str
 
+ROUTER_COL_WIDTH = 11
+API_LOGGER_NAME = "api"
+
+class Formatter(logging.Formatter):
+    LEVEL_MAP = {
+        logging.DEBUG: "DEBUG",
+        logging.INFO: "INFO",
+        logging.WARNING: "WARN",
+        logging.ERROR: "ERROR",
+        logging.CRITICAL: "CRIT",
+    }
+
+    def __init__(self, datefmt: str | None = None):
+        super().__init__(datefmt=datefmt or "%Y-%m-%d %H:%M:%S")
+
+    def format(self, record: logging.LogRecord) -> str:
+        level_word = self.LEVEL_MAP.get(record.levelno, record.levelname)
+        level_field = (level_word + ":").ljust(7)
+        dt = self.formatTime(record, self.datefmt)
+        msg = record.getMessage()
+
+        return f"{level_field} {dt} {msg}"
+
 class Logger:
-    def __init__(self, base_logger: Str = "uvicorn"):
+    def __init__(self, base_logger: Str =API_LOGGER_NAME):
         self._base_logger = base_logger
 
-    def _caller_info(self):
+    def _caller_router_name(self) -> Str | None:
+        """
+        Try to infer router.name from the caller’s module.
+        """
         try:
-            frame = inspect.stack()[2].frame
+            frame = inspect.stack()[3].frame
         except Exception:
             frame = None
 
-        module_name = None
-        router_name = None
+        if frame is None:
+            return None
 
-        if frame is not None:
-            from api.mods.helper import _get_router_class
-            module_name = frame.f_globals.get("__name__", "__main__")
-            R = _get_router_class()
-            try:
-                for v in frame.f_globals.values():
-                    if isinstance(v, R):
-                        router_name = getattr(v, "name", None)
-                        if router_name:
-                            break
-            except Exception:
-                router_name = None
+        from api.mods.helper import _get_router_class
+        R = _get_router_class()
+        try:
+            for v in frame.f_globals.values():
+                if isinstance(v, R):
+                    name = getattr(v, "name", None)
+                    if name:
+                        return name
+        except Exception:
+            return None
+        return None
 
-        return module_name, router_name
-
-    def _target_logger(self):
-        from api.mods.helper import _api_name
-        if _api_name:
-            module_name, router_name = self._caller_info()
-            if router_name:
-                return logging.getLogger(f"[{_api_name}] [{router_name}]")
-            if module_name:
-                short = module_name.rsplit(".", 1)[-1]
-                return logging.getLogger(f"[{_api_name}] [{short}]")
-            return logging.getLogger(_api_name)
-        return logging.getLogger(self._base_logger)
+    def _log(
+        self,
+        level: int,
+        message: Str,
+        router_name: Str | None = None,
+        *args: Any,
+        **kwargs: Any,
+    ) -> None:
+        try:
+            from api.mods.helper import _build_logger, _build_prefix
+            logger = _build_logger()
+            router = router_name or self._caller_router_name()
+            prefix = _build_prefix(router)
+            logger.log(level, prefix + message, *args, **kwargs)
+        except Exception:
+            pass
 
     def debug(self, message: Str, *args: Any, **kwargs: Any) -> None:
-        try:
-            self._target_logger().debug(message, *args, **kwargs)
-        except Exception:
-            pass
+        self._log(logging.DEBUG, message, *args, **kwargs)
 
     def info(self, message: Str, *args: Any, **kwargs: Any) -> None:
-        try:
-            self._target_logger().info(message, *args, **kwargs)
-        except Exception:
-            pass
+        self._log(logging.INFO, message, *args, **kwargs)
 
-    def warning(self, message: Str, *args: Any, **kwargs: Any) -> None:
-        try:
-            self._target_logger().warning(message, *args, **kwargs)
-        except Exception:
-            pass
+    def warning(self, message: Str, *args, **kwargs):
+        self._log(logging.WARNING, message, *args, **kwargs)
 
     warn = warning
 
     def error(self, message: Str, *args: Any, **kwargs: Any) -> None:
-        try:
-            self._target_logger().error(message, *args, **kwargs)
-        except Exception:
-            pass
+        self._log(logging.ERROR, message, *args, **kwargs)
 
     err = error
 
     def critical(self, message: Str, *args: Any, **kwargs: Any) -> None:
-        try:
-            self._target_logger().critical(message, *args, **kwargs)
-        except Exception:
-            pass
+        self._log(logging.CRITICAL, message, *args, **kwargs)
+
+    def _client_warning(self, message: Str, *args: Any, **kwargs: Any) -> None:
+        self._log(logging.WARNING, message, router_name="client-side", *args, **kwargs)
+
+    def _client_error(self, message: Str, *args: Any, **kwargs: Any) -> None:
+        self._log(logging.ERROR, message, router_name="client-side", *args, **kwargs)
+
 
 log = Logger()
+

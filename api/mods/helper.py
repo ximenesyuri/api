@@ -1,6 +1,7 @@
 import os
 import sys
 import inspect
+import logging
 from datetime import datetime, timedelta
 import json
 from typing import get_type_hints
@@ -30,11 +31,48 @@ def _get_router_class():
     global _ROUTER_CLASS
     if _ROUTER_CLASS is None:
         try:
-            from api.mods.router import Router as _R
-            _ROUTER_CLASS = _R
+            from api.mods.router import Router
+            _ROUTER_CLASS = Router
         except Exception:
             _ROUTER_CLASS = object
     return _ROUTER_CLASS
+
+def _build_logger(logger, formatter) -> logging.Logger:
+    logger = logging.getLogger(logger)
+    if not logger.handlers:
+        handler = logging.StreamHandler()
+        handler.setFormatter(formatter)
+        logger.addHandler(handler)
+        logger.setLevel(logging.DEBUG)
+        logger.propagate = False
+    return logger
+
+def _truncate_router_name(name: Str, maxlen: int) -> Str:
+    if len(name) <= maxlen:
+        return name
+    if maxlen <= 3:
+        return name[:maxlen]
+    return name[: maxlen - 3] + "..."
+
+def _build_prefix(router_name: Str | None = None) -> Str:
+    from api.mods.helper import _api_name
+
+    api_name = _api_name or "api"
+
+    api_part = f"[{api_name}]"
+
+    label = router_name or ""
+    if label:
+        label = _truncate_router_name(label, ROUTER_COL_WIDTH)
+        router_bracket = f"[{label}]"
+    else:
+        router_bracket = "[]"
+
+    target_width = ROUTER_COL_WIDTH + 2  # '[' + name + ']'
+    spaces_after = max(0, target_width - len(router_bracket))
+    router_part = f"{router_bracket}{' ' * spaces_after}"
+
+    return f"{api_part} {router_part} "
 
 def _unwrap(func):
     f = func
