@@ -3,7 +3,7 @@ import inspect
 from typed import Any, Str
 
 ROUTER_COL_WIDTH = 11
-API_LOGGER_NAME = "api"
+BASE_LOGGER = "uvicorn.error"
 
 class Formatter(logging.Formatter):
     LEVEL_MAP = {
@@ -14,7 +14,7 @@ class Formatter(logging.Formatter):
         logging.CRITICAL: "CRIT",
     }
 
-    def __init__(self, datefmt: str | None = None):
+    def __init__(self, datefmt=None):
         super().__init__(datefmt=datefmt or "%Y-%m-%d %H:%M:%S")
 
     def format(self, record: logging.LogRecord) -> str:
@@ -26,13 +26,10 @@ class Formatter(logging.Formatter):
         return f"{level_field} {dt} {msg}"
 
 class Logger:
-    def __init__(self, base_logger: Str =API_LOGGER_NAME):
+    def __init__(self, base_logger: Str =BASE_LOGGER):
         self._base_logger = base_logger
 
-    def _caller_router_name(self) -> Str | None:
-        """
-        Try to infer router.name from the caller’s module.
-        """
+    def _caller_router_name(self):
         try:
             frame = inspect.stack()[3].frame
         except Exception:
@@ -57,15 +54,15 @@ class Logger:
         self,
         level: int,
         message: Str,
-        router_name: Str | None = None,
+        router_name=None,
         *args: Any,
         **kwargs: Any,
     ) -> None:
         try:
             from api.mods.helper import _build_logger, _build_prefix
-            logger = _build_logger(API_LOGGER_NAME, Formatter())
+            logger = _build_logger(BASE_LOGGER, Formatter())
             router = router_name or self._caller_router_name()
-            prefix = _build_prefix(router)
+            prefix = _build_prefix(ROUTER_COL_WIDTH, router)
             logger.log(level, prefix + message, *args, **kwargs)
         except Exception:
             pass
