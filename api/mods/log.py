@@ -3,7 +3,7 @@ import inspect
 from typed import Any, Str
 
 ROUTER_COL_WIDTH = 11
-BASE_LOGGER = "uvicorn.error"
+BASE_LOGGER = "uvicorn"
 
 class Formatter(logging.Formatter):
     LEVEL_MAP = {
