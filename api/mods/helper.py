@@ -39,12 +39,8 @@ def _get_router_class():
 
 def _build_logger(logger, formatter) -> logging.Logger:
     logger = logging.getLogger(logger)
-    if not logger.handlers:
-        handler = logging.StreamHandler()
-        handler.setFormatter(formatter)
-        logger.addHandler(handler)
-        logger.setLevel(logging.DEBUG)
-        logger.propagate = False
+    logger.setLevel(logging.DEBUG)
+    logger.propagate = True
     return logger
 
 def _truncate_router_name(name: Str, maxlen: int) -> Str:
@@ -54,21 +50,17 @@ def _truncate_router_name(name: Str, maxlen: int) -> Str:
         return name[:maxlen]
     return name[: maxlen - 3] + "..."
 
-def _build_prefix(router_name: Str | None = None) -> Str:
-    from api.mods.helper import _api_name
-
+def _build_prefix(col_width, router_name=None) -> Str:
     api_name = _api_name or "api"
-
     api_part = f"[{api_name}]"
-
     label = router_name or ""
     if label:
-        label = _truncate_router_name(label, ROUTER_COL_WIDTH)
+        label = _truncate_router_name(label, col_width)
         router_bracket = f"[{label}]"
     else:
         router_bracket = "[]"
 
-    target_width = ROUTER_COL_WIDTH + 2  # '[' + name + ']'
+    target_width = col_width + 2
     spaces_after = max(0, target_width - len(router_bracket))
     router_part = f"{router_bracket}{' ' * spaces_after}"
 

@@ -8,7 +8,7 @@ from typed import Str, Maybe, Bool, Path
 
 class API:
     def __init__(self, name: Str="api", debug: Bool=False, mids=None):
-        from api.mods.log import log, BASE_LOGGER
+        from api.mods.log import log
         try:
             self.name = name
             from api.mods.helper import _set_api_name
@@ -19,7 +19,7 @@ class API:
         self._starlette = Starlette(debug=debug)
         self.mids = mids
 
-        self._logger = logging.getLogger(BASE_LOGGER)
+        self._logger = logging.getLogger(self.name or "api")
         if not self._logger.handlers:
             handler = logging.StreamHandler()
             formatter = logging.Formatter(
@@ -32,7 +32,7 @@ class API:
 
         @self._starlette.exception_handler(TypeError)
         async def type_error_handler(request: Request, exc: TypeError):
-            log._client_warning(
+            log.client_warning(
                 f"Validation error (422) on {request.method} {request.url.path}: \n{exc}"
             )
             return JSONResponse({"detail": str(exc)}, status_code=422)
