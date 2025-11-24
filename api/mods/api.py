@@ -4,11 +4,11 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, PlainTextResponse
 from starlette.routing import Route as _Route
 from starlette.exceptions import HTTPException as StarletteHTTPException
-from typed import Str, List, Maybe, Bool, Path
+from typed import Str, Maybe, Bool, Path
 
 class API:
     def __init__(self, name: Str="api", debug: Bool=False, mids=None):
-        from api.mods.log import log
+        from api.mods.log import log, BASE_LOGGER
         try:
             self.name = name
             from api.mods.helper import _set_api_name
@@ -19,7 +19,7 @@ class API:
         self._starlette = Starlette(debug=debug)
         self.mids = mids
 
-        self._logger = logging.getLogger(self.name or "api")
+        self._logger = logging.getLogger(BASE_LOGGER)
         if not self._logger.handlers:
             handler = logging.StreamHandler()
             formatter = logging.Formatter(
@@ -28,7 +28,7 @@ class API:
             handler.setFormatter(formatter)
             self._logger.addHandler(handler)
         self._logger.setLevel(logging.DEBUG if debug else logging.INFO)
-        self._logger.propagate = False
+        self._logger.propagate = True
 
         @self._starlette.exception_handler(TypeError)
         async def type_error_handler(request: Request, exc: TypeError):
