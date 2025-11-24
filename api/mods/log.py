@@ -26,7 +26,7 @@ class Formatter(logging.Formatter):
         return f"{level_field} {dt} {msg}"
 
 class Logger:
-    def __init__(self, base_logger: Str =BASE_LOGGER):
+    def __init__(self, base_logger: Str=BASE_LOGGER):
         self._base_logger = base_logger
 
     def _caller_router_name(self):
