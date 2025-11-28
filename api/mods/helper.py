@@ -9,7 +9,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, Response, PlainTextResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.concurrency import run_in_threadpool
-from typed import Any, TYPE, Str, Bool, Function, Json, Dict, List
+from typed import Any, TYPE, Str, Bool, Function, Json, Dict, List, Nill
 from typed.mods.helper.helper import (
     _hinted_domain,
     _hinted_codomain,
@@ -186,11 +186,11 @@ async def _read_body(request: Request) -> Any:
         return None
 
 def _want_body_for(param_name: Str, ann: Any) -> Bool:
-    if ann is None or ann is inspect._empty:
+    if ann is Nill or ann is inspect._empty:
         return False
     if getattr(ann, "is_model", False):
         return True
-    if ann is Json or ann is Dict or ann is dict or ann is list or isinstance(ann, (List, Dict)):
+    if ann <= Json or ann <= List or ann <= Dict:
         return True
     return False
 
