@@ -2,7 +2,8 @@ from datetime import datetime
 from starlette.responses import JSONResponse as Response
 from starlette.exceptions import HTTPException
 
-from typed import typed, Nat, Str, Json
+from typed import typed, Nat, Str
+from utils.types import Json
 
 Response.__display__ = 'Response'
 

@@ -9,7 +9,8 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, Response, PlainTextResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.concurrency import run_in_threadpool
-from typed import Any, TYPE, Str, Bool, Function, Json, Dict, List, Nill
+from typed import Any, TYPE, Str, Bool, Function, Dict, List, Nill
+from utils.types import Json
 from typed.mods.helper.helper import (
     _hinted_domain,
     _hinted_codomain,
