@@ -2,13 +2,13 @@ import os
 import sys
 import inspect
 import logging
-from datetime import datetime, timedelta
 import json
-from typing import get_type_hints
-from starlette.requests import Request
-from starlette.responses import JSONResponse, Response, PlainTextResponse
-from starlette.exceptions import HTTPException as StarletteHTTPException
-from starlette.concurrency import run_in_threadpool
+import asyncio
+from datetime import datetime, timedelta
+from typing import get_type_hints, List as PyList, Dict as PyDict, Any as PyAny
+from urllib.parse import parse_qs
+from http.cookies import SimpleCookie
+
 from typed import Any, TYPE, Str, Bool, Function, Dict, List, Nill
 from utils.types import Json
 from typed.mods.helper.helper import (
@@ -18,15 +18,20 @@ from typed.mods.helper.helper import (
     _check_codomain,
 )
 
-blocked_ips = {}
+# ---------------------------------------------------------------------------
+# Globals for IP-blocking and misc
+# ---------------------------------------------------------------------------
 
+blocked_ips = {}
 _auth_failures = {}
 _ROUTER_CLASS = None
 _api_name = None
 
+
 def _set_api_name(name: Str) -> None:
     global _api_name
     _api_name = name
+
 
 def _get_router_class():
     global _ROUTER_CLASS
@@ -38,11 +43,13 @@ def _get_router_class():
             _ROUTER_CLASS = object
     return _ROUTER_CLASS
 
+
 def _build_logger(logger, formatter) -> logging.Logger:
     logger = logging.getLogger(logger)
     logger.setLevel(logging.DEBUG)
     logger.propagate = True
     return logger
+
 
 def _truncate_router_name(name: Str, maxlen: int) -> Str:
     if len(name) <= maxlen:
@@ -50,6 +57,7 @@ def _truncate_router_name(name: Str, maxlen: int) -> Str:
     if maxlen <= 3:
         return name[:maxlen]
     return name[: maxlen - 3] + "..."
+
 
 def _build_prefix(col_width, router_name=None) -> Str:
     api_name = _api_name or "api"
@@ -67,6 +75,7 @@ def _build_prefix(col_width, router_name=None) -> Str:
 
     return f"{api_part} {router_part} "
 
+
 def _unwrap(func):
     f = func
     while hasattr(f, "func") and callable(getattr(f, "func")):
@@ -76,11 +85,115 @@ def _unwrap(func):
         f = inner
     return f
 
+
+# ---------------------------------------------------------------------------
+# Minimal Request / QueryParams / Error
+# ---------------------------------------------------------------------------
+
+
+class Error(Exception):
+    """
+    Simple HTTP-style error used internally by the framework.
+    """
+
+    def __init__(self, status_code: int, detail: str, headers: PyDict[str, str] | None = None):
+        super().__init__(detail)
+        self.status_code = int(status_code)
+        self.detail = detail
+        self.headers = headers or {}
+
+
+class QueryParams:
+    """
+    Very small helper for query-parameter access, similar to Starlette's QueryParams.
+    """
+
+    def __init__(self, query_string: bytes | str | None):
+        if isinstance(query_string, bytes):
+            qs = query_string.decode("ascii", "ignore")
+        else:
+            qs = query_string or ""
+        self._data: PyDict[str, PyList[str]] = parse_qs(qs, keep_blank_values=True)
+
+    def get(self, name: str, default: PyAny = None) -> PyAny:
+        values = self._data.get(name)
+        if not values:
+            return default
+        return values[0]
+
+    def getlist(self, name: str) -> PyList[str]:
+        return self._data.get(name, [])
+
+    def __contains__(self, name: str) -> bool:
+        return name in self._data
+
+    def __repr__(self) -> str:
+        return f"QueryParams({self._data!r})"
+
+
+class Request:
+    """
+    Minimal request object the framework uses internally.
+
+    Built from the ASGI scope + body by api.API.__call__.
+    """
+
+    def __init__(
+        self,
+        method: str,
+        path: str,
+        query_string: bytes | str | None,
+        headers: PyList[tuple[bytes, bytes]] | None,
+        path_params: PyDict[str, str] | None,
+        body: bytes | None,
+        client: tuple[str, int] | None,
+    ):
+        self.method = method.upper()
+        self.path = path
+        self.query_params = QueryParams(query_string)
+        self.path_params: PyDict[str, str] = path_params or {}
+        self._body = body or b""
+        self.client = client
+
+        # Normalize headers to lower-case string keys
+        hdrs: PyDict[str, str] = {}
+        if headers:
+            for name_b, value_b in headers:
+                name = name_b.decode("latin1").lower()
+                value = value_b.decode("latin1")
+                hdrs[name] = value
+        self.headers = hdrs
+
+        # Cookies
+        cookie_header = self.headers.get("cookie")
+        if cookie_header:
+            c = SimpleCookie()
+            c.load(cookie_header)
+            self.cookies = {k: morsel.value for k, morsel in c.items()}
+        else:
+            self.cookies = {}
+
+    async def body(self) -> bytes:
+        return self._body
+
+    async def json(self) -> PyAny:
+        if not self._body:
+            return None
+        text = self._body.decode("utf-8", errors="ignore")
+        return json.loads(text)
+
+
+# ---------------------------------------------------------------------------
+# Parsing helpers
+# ---------------------------------------------------------------------------
+
+
 def _looks_like_json(s: Str) -> Bool:
     if not isinstance(s, str):
         return False
     t = s.strip()
     return (t.startswith("{") and t.endswith("}")) or (t.startswith("[") and t.endswith("]"))
+
 
 def _parse_literal(value):
     if not isinstance(value, str):
@@ -102,16 +215,17 @@ def _parse_literal(value):
         pass
     return value
 
+
 def _parse_json_maybe(value):
     if not isinstance(value, str):
         return value
     if _looks_like_json(value):
         try:
-            import json
             return json.loads(value)
         except Exception:
             return value
     return value
+
 
 def _maybe_cast_sequence_to_target(seq, ann):
     try:
@@ -127,7 +241,8 @@ def _maybe_cast_sequence_to_target(seq, ann):
         return set(seq)
     return seq
 
-def _parse_query_value(name: str, ann, request) -> Any:
+
+def _parse_query_value(name: str, ann, request: Request) -> Any:
     vals = request.query_params.getlist(name)
     if len(vals) > 1:
         parsed = [_parse_literal(v) for v in vals]
@@ -146,34 +261,11 @@ def _parse_query_value(name: str, ann, request) -> Any:
 
     return None
 
-def _to_response(result: Any) -> Response:
-    if isinstance(result, Response):
-        return result
-
-    if hasattr(result, "__json__"):
-        return JSONResponse(result.__json__)
-
-    if isinstance(result, tuple) and len(result) == 2:
-        data, status = result
-        if hasattr(data, "__json__"):
-            data = data.__json__
-        return JSONResponse(data, status_code=int(status))
-
-    if result is None:
-        return Response(status_code=204)
-
-    if isinstance(result, (dict, list)):
-        return JSONResponse(result)
-
-    try:
-        json.dumps(result)
-        return JSONResponse(result)
-    except Exception:
-        return PlainTextResponse(str(result))
 
 async def _read_body(request: Request) -> Any:
     try:
-        if "application/json" in (request.headers.get("content-type") or ""):
+        ctype = request.headers.get("content-type") or ""
+        if "application/json" in ctype:
             return await request.json()
         body_bytes = await request.body()
         if not body_bytes:
@@ -186,6 +278,7 @@ async def _read_body(request: Request) -> Any:
     except Exception:
         return None
 
+
 def _want_body_for(param_name: Str, ann: Any) -> Bool:
     if ann is Nill or ann is inspect._empty:
         return False
@@ -195,13 +288,16 @@ def _want_body_for(param_name: Str, ann: Any) -> Bool:
         return True
     return False
 
+
 async def _build_kwargs(func: Function, request: Request) -> Dict:
+    """
+    Build kwargs for a user handler based on function signature and Request.
+    """
     sig = inspect.signature(func)
     hints = get_type_hints(func)
 
     params = sig.parameters
     path_params = request.path_params or {}
-    query_params = request.query_params
     headers = {k.lower(): v for k, v in request.headers.items()}
     cookies = request.cookies or {}
 
@@ -217,14 +313,13 @@ async def _build_kwargs(func: Function, request: Request) -> Dict:
 
         ann = hints.get(name)
 
-        # Path
+        # Path params
         if name in path_params:
             value = path_params[name]
-            kw[name] = _parse_json_maybe(value)
-            kw[name] = _parse_literal(kw[name])
+            kw[name] = _parse_literal(_parse_json_maybe(value))
             continue
 
-        # Query
+        # Query params
         if name in request.query_params:
             kw[name] = _parse_query_value(name, ann, request)
             continue
@@ -251,20 +346,35 @@ async def _build_kwargs(func: Function, request: Request) -> Dict:
 
             if getattr(ann, "is_model", False):
                 if not isinstance(body_value, dict):
-                    raise TypeError(f"Body for '{name}' must be a JSON object for model '{getattr(ann, '__name__', str(ann))}'")
+                    raise TypeError(
+                        f"Body for '{name}' must be a JSON object "
+                        f"for model '{getattr(ann, '__name__', str(ann))}'"
+                    )
                 from typed.mods.models import validate as typed_validate
+
                 entity = typed_validate(body_value, ann)
                 kw[name] = ann(**entity)
             else:
                 kw[name] = body_value
             continue
 
+        # Default or required
         if p.default is not inspect._empty:
             kw[name] = p.default
         else:
-            raise StarletteHTTPException(status_code=422, detail=f"Missing required parameter '{name}'")
+            # Validation-like error
+            raise Error(
+                status_code=422,
+                detail=f"Missing required parameter '{name}'",
+            )
 
     return kw
+
+
+# ---------------------------------------------------------------------------
+# Middlewares (IP block, token auth)
+# ---------------------------------------------------------------------------
+
 
 def _enforce_ip_block(request: Request, mids, status_code: int | None = None) -> None:
     from api.mods.mids import Block
@@ -281,14 +391,20 @@ def _enforce_ip_block(request: Request, mids, status_code: int | None = None) ->
     if block_mid is None:
         return
 
-    ip = (request.client.host if request.client else None) or "unknown"
+    # Determine client IP
+    client = getattr(request, "client", None)
+    if isinstance(client, tuple) and client:
+        ip = client[0]
+    else:
+        ip = "unknown"
+
     now = datetime.now()
 
     info = blocked_ips.get(ip)
     if info is not None:
         blocked_until = info.get("blocked_until")
         if blocked_until is None or blocked_until > now:
-            raise StarletteHTTPException(
+            raise Error(
                 status_code=403,
                 detail=info.get("message", block_mid.message),
             )
@@ -338,10 +454,11 @@ def _enforce_ip_block(request: Request, mids, status_code: int | None = None) ->
         }
         _auth_failures.pop(ip, None)
 
-        raise StarletteHTTPException(
+        raise Error(
             status_code=403,
             detail=block_mid.message,
         )
+
 
 def _enforce_token_auth(request: Request, mids) -> None:
     from api.mods.mids import Auth, Token
@@ -375,21 +492,35 @@ def _enforce_token_auth(request: Request, mids) -> None:
             got = request.query_params.get("token")
 
         if not got or got != expected:
-            raise StarletteHTTPException(
+            raise Error(
                 status_code=401,
                 detail="Unauthorized",
                 headers={"WWW-Authenticate": 'Bearer realm="api"'},
             )
         return
 
-    raise StarletteHTTPException(status_code=500, detail="Unsupported authentication type")
+    raise Error(status_code=500, detail="Unsupported authentication type")
+
+
+# ---------------------------------------------------------------------------
+# Handler factory
+# ---------------------------------------------------------------------------
 
 
 def _make_handler(func: Function, method: Str, mids=None) -> Function:
+    """
+    Wrap the user handler into an async callable that:
+      - builds kwargs from Request (path/query/body/headers/cookies)
+      - checks typed domain/codomain
+      - runs sync functions in a thread
+    Note: middlewares (auth/block) are *not* applied here; they are
+    applied centrally in api.API.__call__.
+    """
     original = _unwrap(func)
     sig = inspect.signature(original)
     param_names = [
-        name for name, p in sig.parameters.items()
+        name
+        for name, p in sig.parameters.items()
         if p.kind in (p.POSITIONAL_ONLY, p.POSITIONAL_OR_KEYWORD, p.KEYWORD_ONLY)
     ]
 
@@ -397,47 +528,35 @@ def _make_handler(func: Function, method: Str, mids=None) -> Function:
     expected_codomain = _hinted_codomain(original)
     is_async = inspect.iscoroutinefunction(original)
 
-    async def handler(request: Request) -> Response:
-        try:
-            setattr(request.state, "_used_ip_block_handler", True)
+    async def handler(request: Request):
+        kw = await _build_kwargs(original, request)
+        args_list = [kw[name] for name in param_names if name in kw]
 
-            if mids:
-                _enforce_ip_block(request, mids, status_code=None)
-                _enforce_token_auth(request, mids)
+        _check_domain(original, param_names, expected_domain, None, args_list)
 
-            kw = await _build_kwargs(original, request)
-            args_list = [kw[name] for name in param_names if name in kw]
+        if is_async:
+            result = await original(**kw)
+        else:
+            # Run sync handler in a thread
+            result = await asyncio.to_thread(original, **kw)
 
-            _check_domain(original, param_names, expected_domain, None, args_list)
+        _check_codomain(
+            original,
+            expected_codomain,
+            TYPE(result),
+            result,
+            param_value_map=kw,
+        )
 
-            if is_async:
-                result = await original(**kw)
-            else:
-                result = await run_in_threadpool(lambda: original(**kw))
-
-            _check_codomain(original, expected_codomain, TYPE(result), result, param_value_map=kw)
-
-            response = _to_response(result)
-
-            if mids:
-                _enforce_ip_block(request, mids, status_code=response.status_code)
-
-            return response
-
-        except StarletteHTTPException as exc:
-            if mids:
-                _enforce_ip_block(request, mids, status_code=exc.status_code)
-            raise
-        except TypeError:
-            if mids:
-                _enforce_ip_block(request, mids, status_code=422)
-            raise
-        except Exception:
-            if mids:
-                _enforce_ip_block(request, mids, status_code=500)
-            raise
+        return result
 
     return handler
+
+
+# ---------------------------------------------------------------------------
+# Import string helper (left mostly unchanged)
+# ---------------------------------------------------------------------------
+
 
 def _import_string(self) -> str:
     caller_frame = inspect.stack()[2].frame
@@ -492,3 +611,4 @@ def _import_string(self) -> str:
         module_path = rel_mod
 
     return f"{module_path}:{var_name}"
+

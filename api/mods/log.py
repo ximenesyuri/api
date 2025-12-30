@@ -4,26 +4,29 @@ from typed import Any, Str
 
 ROUTER_COL_WIDTH = 11
 LOGGER_NAME = "api"
+CLIENT_LEVEL = logging.INFO + 1
+logging.addLevelName(CLIENT_LEVEL, "CLIENT")
+
 
 class Formatter(logging.Formatter):
-    LEVEL_MAP = {
-        logging.DEBUG: "DEB",
-        logging.INFO: "INF",
-        logging.WARNING: "WRN",
-        logging.ERROR: "ERR",
-        logging.CRITICAL: "CRT",
-    }
+    """
+    Formatter that aligns the log level column so that the timestamp
+    starts at the same position for all levels.
+
+    Example:
+        WARNING: 2025-12-30 14:42:02,515 ...
+        DEBUG:   2025-12-30 14:42:08,380 ...
+    """
 
     def __init__(self, datefmt: str | None = None):
         super().__init__(datefmt=datefmt or "%Y-%m-%d %H:%M:%S")
 
     def format(self, record: logging.LogRecord) -> str:
-        level_word = self.LEVEL_MAP.get(record.levelno, record.levelname)
-        level_field = (level_word + ":").ljust(7)
-
+        level_field = f"{record.levelname}:".ljust(8)
         dt = self.formatTime(record, self.datefmt)
         msg = record.getMessage()
         return f"{level_field} {dt} {msg}"
+
 
 def _get_app_logger() -> logging.Logger:
     logger = logging.getLogger(LOGGER_NAME)
@@ -35,12 +38,14 @@ def _get_app_logger() -> logging.Logger:
         logger.propagate = False
     return logger
 
+
 def _truncate_router_name(name: Str, maxlen: int) -> Str:
     if len(name) <= maxlen:
         return name
     if maxlen <= 3:
         return name[:maxlen]
     return name[: maxlen - 3] + "..."
+
 
 def _build_prefix(router_name: Str | None = None) -> Str:
     from api.mods.helper import _api_name
@@ -58,6 +63,7 @@ def _build_prefix(router_name: Str | None = None) -> Str:
     spaces_after = max(0, target_width - len(router_bracket))
     router_part = f"{router_bracket}{' ' * spaces_after}"
     return f"{api_part} {router_part} "
+
 
 class Logger:
     def __init__(self, base_logger: Str = LOGGER_NAME):
@@ -119,11 +125,9 @@ class Logger:
     def critical(self, message: Str, *args: Any, **kwargs: Any) -> None:
         self._log(logging.CRITICAL, message, *args, **kwargs)
 
-    def client_warning(self, message: Str, *args: Any, **kwargs: Any) -> None:
-        self._log(logging.WARNING, message, router_name="client-side", *args, **kwargs)
-
-    def client_error(self, message: Str, *args: Any, **kwargs: Any) -> None:
-        self._log(logging.ERROR, message, router_name="client-side", *args, **kwargs)
+    def client(self, message: Str, *args: Any, **kwargs: Any) -> None:
+        router_name = kwargs.pop("router_name", None)
+        self._log(CLIENT_LEVEL, message, router_name=router_name, *args, **kwargs)
 
 log = Logger()
 

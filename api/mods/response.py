@@ -1,45 +1,34 @@
-from datetime import datetime
-from starlette.responses import JSONResponse as Response
-from starlette.exceptions import HTTPException
-
-from typed import typed, Nat, Str
+from typed import model, Enum, Str, Int, List, Dict, Union, Nat, typed
 from utils.types import Json
 
-Response.__display__ = 'Response'
+
+@model
+class Response:
+    """
+    High-level API response model.
+
+    This is the *logical* response returned by your endpoint functions.
+    It will be serialized to JSON for HTTP responses by the framework.
+
+    Fields:
+        status: 'success' or 'failure'
+        code:   integer status code (also used as HTTP status code)
+        data:   payload (string, list, or dict)
+    """
+    status: Enum(Str, "success", "failure")
+    code: Int
+    data: Union(Str, List, Dict)
+
 
 class response:
-    @typed
-    def success(message: Str, code: Nat=200, data: Json={}) -> Response:
-        content = {
-            "status": "success",
-            "code": code,
-            "datetime": datetime.now().isoformat()
-        }
-        if message:
-            content.update({'message': message})
-        if data:
-            content.update({'data': data})
-        return Response(
-            status_code=code,
-            content=content
-        )
+    """
+    Convenience helpers to build Response models.
+    """
 
     @typed
-    def failure(message: Str, code: Nat, data: Json={}) -> Response:
-        content = {
-            "status": "failure",
-            "code": code,
-            "datetime": datetime.now().isoformat()
-        }
-        if message:
-            content.update({'message': message})
-        if data:
-            content.update({'data': data})
-        return Response(
-            status_code=code,
-            content=content
-        )
+    def success(data: Json = {}, code: Nat = 200) -> Response:
+        return Response(status="success", code=code, data=data)
 
     @typed
-    def error(message: Str, code: Nat) -> HTTPException:
-        return HTTPException(status_code=code, detail=message)
+    def failure(data: Json = {}, code: Nat = 400) -> Response:
+        return Response(status="failure", code=code, data=data)
