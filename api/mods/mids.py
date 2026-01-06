@@ -1,4 +1,5 @@
-from typed import model, Enum, Str, Int, Nat, List
+from typed import model, Enum, Str, Int, List
+from utils.types import Nat
 
 AuthType = Enum(Str, 'token', 'basic')
 

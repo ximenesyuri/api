@@ -1,9 +1,7 @@
-from typed import Function, Any, Str, Maybe, Path, List
 from api.mods.helper import _unwrap
-from api.mods.mids import Middleware
 
 class Route:
-    def __init__(self: Any, method: Str, path: Path, func: Function, name: Maybe(Str)=None, mids: List(Middleware)=None):
+    def __init__(self, method, path, func, name=None, mids=None):
         self.method = method.upper()
         self.path = path if path.startswith("/") else f"/{path}"
         self.func = func
@@ -11,7 +9,7 @@ class Route:
         self.mids = mids
 
 class Router:
-    def __init__(self, name: Str="router", prefix: Str="", mids: List(Middleware)=None) -> Any:
+    def __init__(self, name="router", prefix="", mids=None):
         self.name = name
         self.prefix = prefix or ""
         if self.prefix and not self.prefix.startswith("/"):
@@ -19,7 +17,7 @@ class Router:
         self._routes = []
         self.mids = mids
 
-    def route(self: Any, method: Str, path: Path, name: Maybe(Str)=None, mids: List(Middleware)=None) -> Function:
+    def route(self, method, path, name=None, mids=None):
         if not path.startswith("/"):
             path = "/" + path
         def decorator(func):
@@ -27,23 +25,23 @@ class Router:
             return func
         return decorator
 
-    def get(self: Any, path: Path, name: Maybe(Str)=None, mids: List(Middleware)=None):
+    def get(self, path, name=None, mids=None):
         return self.route("GET", path, name, mids)
 
-    def post(self, path: Path, name: Maybe(Str)=None, mids: List(Middleware)=None):
+    def post(self, path, name=None, mids=None):
         return self.route("POST", path, name, mids)
 
-    def put(self, path: Path, name: Maybe(Str)=None, mids: List(Middleware)=None):
+    def put(self, path, name=None, mids=None):
         return self.route("PUT", path, name, mids)
 
-    def patch(self, path: Path, name: Maybe(Str)=None, mids: List(Middleware)=None):
+    def patch(self, path, name=None, mids=None):
         return self.route("PATCH", path, name, mids)
 
-    def delete(self, path: Path, name: Maybe(Str)=None, mids: List(Middleware)=None):
+    def delete(self, path, name=None, mids=None):
         return self.route("DELETE", path, name, mids)
 
-    def options(self, path: Path, name: Maybe(Str)=None, mids: List(Middleware)=None):
+    def options(self, path, name=None, mids=None):
         return self.route("OPTIONS", path, name, mids)
 
-    def head(self, path: Str, name: Maybe(Str)=None, mids: List(Middleware)=None):
+    def head(self, path, name=None, mids=None):
         return self.route("HEAD", path, name, mids)

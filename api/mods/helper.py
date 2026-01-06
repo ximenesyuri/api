@@ -5,11 +5,11 @@ import logging
 import json
 import asyncio
 from datetime import datetime, timedelta
-from typing import get_type_hints, List as PyList, Dict as PyDict, Any as PyAny
 from urllib.parse import parse_qs
 from http.cookies import SimpleCookie
+from typing import get_type_hints
 
-from typed import Any, TYPE, Str, Bool, Function, Dict, List, Nill
+from typed import Any, TYPE, Str, Dict, List, Nill
 from utils.types import Json
 from typed.mods.helper.helper import (
     _hinted_domain,
@@ -18,17 +18,13 @@ from typed.mods.helper.helper import (
     _check_codomain,
 )
 
-# ---------------------------------------------------------------------------
-# Globals for IP-blocking and misc
-# ---------------------------------------------------------------------------
-
 blocked_ips = {}
 _auth_failures = {}
 _ROUTER_CLASS = None
 _api_name = None
 
 
-def _set_api_name(name: Str) -> None:
+def _set_api_name(name):
     global _api_name
     _api_name = name
 
@@ -44,14 +40,14 @@ def _get_router_class():
     return _ROUTER_CLASS
 
 
-def _build_logger(logger, formatter) -> logging.Logger:
+def _build_logger(logger, formatter):
     logger = logging.getLogger(logger)
     logger.setLevel(logging.DEBUG)
     logger.propagate = True
     return logger
 
 
-def _truncate_router_name(name: Str, maxlen: int) -> Str:
+def _truncate_router_name(name, maxlen):
     if len(name) <= maxlen:
         return name
     if maxlen <= 3:
@@ -86,17 +82,8 @@ def _unwrap(func):
     return f
 
 
-# ---------------------------------------------------------------------------
-# Minimal Request / QueryParams / Error
-# ---------------------------------------------------------------------------
-
-
 class Error(Exception):
-    """
-    Simple HTTP-style error used internally by the framework.
-    """
-
-    def __init__(self, status_code: int, detail: str, headers: PyDict[str, str] | None = None):
+    def __init__(self, status_code, detail, headers=None):
         super().__init__(detail)
         self.status_code = int(status_code)
         self.detail = detail
@@ -104,59 +91,39 @@ class Error(Exception):
 
 
 class QueryParams:
-    """
-    Very small helper for query-parameter access, similar to Starlette's QueryParams.
-    """
-
-    def __init__(self, query_string: bytes | str | None):
+    def __init__(self, query_string):
         if isinstance(query_string, bytes):
             qs = query_string.decode("ascii", "ignore")
         else:
             qs = query_string or ""
-        self._data: PyDict[str, PyList[str]] = parse_qs(qs, keep_blank_values=True)
+        self._data = parse_qs(qs, keep_blank_values=True)
 
-    def get(self, name: str, default: PyAny = None) -> PyAny:
+    def get(self, name, default = None):
         values = self._data.get(name)
         if not values:
             return default
         return values[0]
 
-    def getlist(self, name: str) -> PyList[str]:
+    def getlist(self, name):
         return self._data.get(name, [])
 
-    def __contains__(self, name: str) -> bool:
+    def __contains__(self, name):
         return name in self._data
 
-    def __repr__(self) -> str:
+    def __repr__(self):
         return f"QueryParams({self._data!r})"
 
 
 class Request:
-    """
-    Minimal request object the framework uses internally.
-
-    Built from the ASGI scope + body by api.API.__call__.
-    """
-
-    def __init__(
-        self,
-        method: str,
-        path: str,
-        query_string: bytes | str | None,
-        headers: PyList[tuple[bytes, bytes]] | None,
-        path_params: PyDict[str, str] | None,
-        body: bytes | None,
-        client: tuple[str, int] | None,
-    ):
+    def __init__(self, method, path, query_string, headers, path_params, body, client):
         self.method = method.upper()
         self.path = path
         self.query_params = QueryParams(query_string)
-        self.path_params: PyDict[str, str] = path_params or {}
+        self.path_params = path_params or {}
         self._body = body or b""
         self.client = client
 
-        # Normalize headers to lower-case string keys
-        hdrs: PyDict[str, str] = {}
+        hdrs = {}
         if headers:
             for name_b, value_b in headers:
                 name = name_b.decode("latin1").lower()
@@ -164,7 +131,6 @@ class Request:
                 hdrs[name] = value
         self.headers = hdrs
 
-        # Cookies
         cookie_header = self.headers.get("cookie")
         if cookie_header:
             c = SimpleCookie()
@@ -173,22 +139,17 @@ class Request:
         else:
             self.cookies = {}
 
-    async def body(self) -> bytes:
+    async def body(self):
         return self._body
 
-    async def json(self) -> PyAny:
+    async def json(self):
         if not self._body:
             return None
         text = self._body.decode("utf-8", errors="ignore")
         return json.loads(text)
 
 
-# ---------------------------------------------------------------------------
-# Parsing helpers
-# ---------------------------------------------------------------------------
-
-
-def _looks_like_json(s: Str) -> Bool:
+def _looks_like_json(s):
     if not isinstance(s, str):
         return False
     t = s.strip()
@@ -229,12 +190,12 @@ def _parse_json_maybe(value):
 
 def _maybe_cast_sequence_to_target(seq, ann):
     try:
-        from typed.helper import name as typed_name
+        from typed import name
     except Exception:
-        typed_name = lambda x: str(x)
+        name = lambda x: str(x)
     if not isinstance(seq, list):
         return seq
-    n = typed_name(ann) if ann is not None else ""
+    n = name(ann) if ann is not None else ""
     if n.startswith("Tuple(") or n == "Tuple":
         return tuple(seq)
     if n.startswith("Set(") or n == "Set":
@@ -242,7 +203,7 @@ def _maybe_cast_sequence_to_target(seq, ann):
     return seq
 
 
-def _parse_query_value(name: str, ann, request: Request) -> Any:
+def _parse_query_value(name, ann, request):
     vals = request.query_params.getlist(name)
     if len(vals) > 1:
         parsed = [_parse_literal(v) for v in vals]
@@ -262,7 +223,7 @@ def _parse_query_value(name: str, ann, request: Request) -> Any:
     return None
 
 
-async def _read_body(request: Request) -> Any:
+async def _read_body(request):
     try:
         ctype = request.headers.get("content-type") or ""
         if "application/json" in ctype:
@@ -279,7 +240,7 @@ async def _read_body(request: Request) -> Any:
         return None
 
 
-def _want_body_for(param_name: Str, ann: Any) -> Bool:
+def _want_body_for(param_name, ann):
     if ann is Nill or ann is inspect._empty:
         return False
     if getattr(ann, "is_model", False):
@@ -289,10 +250,7 @@ def _want_body_for(param_name: Str, ann: Any) -> Bool:
     return False
 
 
-async def _build_kwargs(func: Function, request: Request) -> Dict:
-    """
-    Build kwargs for a user handler based on function signature and Request.
-    """
+async def _build_kwargs(func, request):
     sig = inspect.signature(func)
     hints = get_type_hints(func)
 
@@ -350,9 +308,9 @@ async def _build_kwargs(func: Function, request: Request) -> Dict:
                         f"Body for '{name}' must be a JSON object "
                         f"for model '{getattr(ann, '__name__', str(ann))}'"
                     )
-                from typed.mods.models import validate as typed_validate
+                from typed.mods.models import validate
 
-                entity = typed_validate(body_value, ann)
+                entity = validate(body_value, ann)
                 kw[name] = ann(**entity)
             else:
                 kw[name] = body_value
@@ -370,13 +328,10 @@ async def _build_kwargs(func: Function, request: Request) -> Dict:
 
     return kw
 
-
-# ---------------------------------------------------------------------------
+# -------------------------------------
 # Middlewares (IP block, token auth)
-# ---------------------------------------------------------------------------
-
-
-def _enforce_ip_block(request: Request, mids, status_code: int | None = None) -> None:
+# -------------------------------------
+def _enforce_ip_block(request, mids, status_code=None):
     from api.mods.mids import Block
 
     if not mids:
@@ -460,7 +415,7 @@ def _enforce_ip_block(request: Request, mids, status_code: int | None = None) ->
         )
 
 
-def _enforce_token_auth(request: Request, mids) -> None:
+def _enforce_token_auth(request, mids):
     from api.mods.mids import Auth, Token
 
     if not mids:
@@ -502,12 +457,10 @@ def _enforce_token_auth(request: Request, mids) -> None:
     raise Error(status_code=500, detail="Unsupported authentication type")
 
 
-# ---------------------------------------------------------------------------
+# ------------------------
 # Handler factory
-# ---------------------------------------------------------------------------
-
-
-def _make_handler(func: Function, method: Str, mids=None) -> Function:
+# ------------------------
+def _make_handler(func, method, mids=None):
     """
     Wrap the user handler into an async callable that:
       - builds kwargs from Request (path/query/body/headers/cookies)
@@ -537,7 +490,6 @@ def _make_handler(func: Function, method: Str, mids=None) -> Function:
         if is_async:
             result = await original(**kw)
         else:
-            # Run sync handler in a thread
             result = await asyncio.to_thread(original, **kw)
 
         _check_codomain(
@@ -551,11 +503,6 @@ def _make_handler(func: Function, method: Str, mids=None) -> Function:
         return result
 
     return handler
-
-
-# ---------------------------------------------------------------------------
-# Import string helper (left mostly unchanged)
-# ---------------------------------------------------------------------------
 
 
 def _import_string(self) -> str:

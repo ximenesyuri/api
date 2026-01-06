@@ -1,9 +1,7 @@
 import logging
 import json
-from dataclasses import dataclass
-from typing import List as PyList, Optional, Tuple as PyTuple, Dict as PyDict
-
-from typed import Str, Maybe, Bool, Path
+from typed import model, List, Function, Maybe, Str
+from utils.types import Path
 
 from api.mods.helper import (
     _set_api_name,
@@ -12,27 +10,27 @@ from api.mods.helper import (
     Error,
     Request,
 )
-from api.mods.response import Response as ModelResponse
+from api.mods.response import Response
 from api.mods.log import log
 from api.mods.router import Router
 
 
-@dataclass
+@model
 class _RouteEntry:
     method: Str
     path: Str
-    handler: callable
+    handler: Function
     name: Str
-    mids: Optional[list]
+    mids: Maybe(List)
 
 
-def _match_path(template: Str, path: Str) -> Optional[PyDict[str, Str]]:
+def _match_path(template, path):
     t_parts = [p for p in template.strip("/").split("/") if p] or [""]
     p_parts = [p for p in path.strip("/").split("/") if p] or [""]
     if len(t_parts) != len(p_parts):
         return None
 
-    params: PyDict[str, Str] = {}
+    params = {}
     for t, p in zip(t_parts, p_parts):
         if t.startswith("{") and t.endswith("}"):
             name = t[1:-1]
@@ -45,25 +43,28 @@ def _match_path(template: Str, path: Str) -> Optional[PyDict[str, Str]]:
 
 
 class API:
-    def __init__(self, name: Str = "api", debug: Bool = False, mids=None):
+    def __init__(self, name="api", log_level='DEBUG', mids=None):
         try:
             self.name = name
             _set_api_name(self.name or "api")
         except Exception:
             self.name = name or "api"
 
-        self._debug = bool(debug)
+        self._log_level = log_level
         self.mids = mids
-        self._routes: PyList[_RouteEntry] = []
+        self._routes = []
 
         from api.mods.log import _get_app_logger
 
         self._logger = _get_app_logger()
-        self._logger.setLevel(logging.DEBUG if self._debug else logging.INFO)
-
-    # ------------------------------------------------------------------
-    # ASGI entrypoint
-    # ------------------------------------------------------------------
+        log_levels = {
+            'DEBUG':    logging.DEBUG,
+            'INFO':     logging.INFO,
+            'WARNING':  logging.WARNING,
+            'ERROR':    logging.ERROR,
+            'CRITICAL': logging.CRITICAL
+        }
+        self._logger.setLevel(log_levels.get(log_level.upper(), logging.INFO))
 
     async def __call__(self, scope, receive, send):
         if scope.get("type") != "http":
@@ -75,13 +76,11 @@ class API:
         headers = scope.get("headers") or []
         client = scope.get("client")
 
-        # Compute client IP for logging
         if isinstance(client, tuple) and client:
             client_ip = client[0]
         else:
             client_ip = "unknown"
 
-        # Build path with query string for logging
         if isinstance(query_string, (bytes, bytearray)):
             qs_raw = query_string.decode("ascii", "ignore")
         else:
@@ -89,7 +88,6 @@ class API:
         path_for_log = path if not qs_raw else f"{path}?{qs_raw}"
 
         client_log_done = False
-        # Read entire body
         body = b""
         more_body = True
         while more_body:
@@ -103,17 +101,14 @@ class API:
             else:
                 more_body = False
 
-        # Route matching
         try:
             route, path_params = self._match_route(method, path)
         except Error as e:
-            # Log no-route or similar errors with client IP and full path+query
             log.warning(
                 f"Error {e.status_code}: {method} {path_for_log} -> {e.detail}",
                 router_name=client_ip,
             )
-            # IMPORTANT: data is plain string, not {"detail": ...}
-            resp_model = ModelResponse(
+            resp_model = Response(
                 status="failure",
                 code=e.status_code,
                 data=e.detail,
@@ -121,7 +116,6 @@ class API:
             await self._send_response(send, resp_model)
             return
 
-        # Build internal Request
         request = Request(
             method=method,
             path=path,
@@ -135,30 +129,25 @@ class API:
         effective_mids = route.mids
 
         try:
-            # Pre-middlewares
             if effective_mids:
                 _enforce_ip_block(request, effective_mids, status_code=None)
                 _enforce_token_auth(request, effective_mids)
 
-            # Call user handler (wrapped by _make_handler)
             result = await route.handler(request)
 
-            # Normalize to Response model
             resp_model = self._to_response_model(result)
 
-            # Post-middlewares (IP block)
             if effective_mids:
                 try:
                     _enforce_ip_block(request, effective_mids, status_code=resp_model.code)
                 except Error as block_exc:
-                    resp_model = ModelResponse(
+                    resp_model = Response(
                         status="failure",
                         code=block_exc.status_code,
-                        data={"detail": block_exc.detail},
+                        data=block_exc.detail,
                     )
 
         except Error as exc:
-            # User-visible error from inside handler
             msg = f"Error {exc.status_code}: {method} {path_for_log} -> {exc.detail}"
             log.client(msg, router_name=client_ip)
             client_log_done = True
@@ -169,14 +158,13 @@ class API:
                 except Error as block_exc:
                     exc = block_exc
 
-            resp_model = ModelResponse(
+            resp_model = Response(
                 status="failure",
                 code=exc.status_code,
-                data={"detail": exc.detail},
+                data=exc.detail,
             )
 
         except TypeError as exc:
-            # Validation-like error (treat as client error 422)
             log.client(
                 f"Error 422: {method} {path_for_log} -> {exc}",
                 router_name=client_ip,
@@ -187,33 +175,30 @@ class API:
                 try:
                     _enforce_ip_block(request, effective_mids, status_code=422)
                 except Error as block_exc:
-                    resp_model = ModelResponse(
+                    resp_model = Response(
                         status="failure",
                         code=block_exc.status_code,
-                        data={"detail": block_exc.detail},
+                        data=block_exc.detail,
                     )
                 else:
-                    resp_model = ModelResponse(
+                    resp_model = Response(
                         status="failure",
                         code=422,
-                        data={"detail": str(exc)},
+                        data=str(exc),
                     )
             else:
-                resp_model = ModelResponse(
+                resp_model = Response(
                     status="failure",
                     code=422,
                     data=str(exc),
                 )
 
         except Exception as exc:
-            # Unhandled internal error
-            # Server-side log
             log.error(
                 f"Unhandled error on {method} {path_for_log}: {exc}",
                 router_name=self.name,
             )
             detail = str(exc) if self._debug else "Internal Server Error"
-            # Client-side log
             log.client(
                 f"Error 500: {method} {path_for_log} -> {detail}",
                 router_name=client_ip,
@@ -224,19 +209,19 @@ class API:
                 try:
                     _enforce_ip_block(request, effective_mids, status_code=500)
                 except Error as block_exc:
-                    resp_model = ModelResponse(
+                    resp_model = Response(
                         status="failure",
                         code=block_exc.status_code,
                         data=block_exc.detail,
                     )
                 else:
-                    resp_model = ModelResponse(
+                    resp_model = Response(
                         status="failure",
                         code=500,
-                        data={"detail": detail},
+                        data=detail,
                     )
             else:
-                resp_model = ModelResponse(
+                resp_model = Response(
                     status="failure",
                     code=500,
                     data=detail,
@@ -266,7 +251,7 @@ class API:
     # Internal helpers
     # ------------------------------------------------------------------
 
-    def _match_route(self, method: Str, path: Str) -> PyTuple[_RouteEntry, PyDict[str, Str]]:
+    def _match_route(self, method, path):
         for r in self._routes:
             if r.method != method.upper():
                 continue
@@ -275,13 +260,13 @@ class API:
                 return r, params
         raise Error(404, f"No route for {method} {path}")
 
-    def _to_response_model(self, result) -> ModelResponse:
-        if isinstance(result, ModelResponse):
+    def _to_response_model(self, result):
+        if isinstance(result, Response):
             return result
 
         if hasattr(result, "__json__"):
             data = getattr(result, "__json__")
-            return ModelResponse(status="success", code=200, data=data)
+            return Response(status="success", code=200, data=data)
 
         try:
             json.dumps(result)
@@ -289,9 +274,9 @@ class API:
         except TypeError:
             data = str(result)
 
-        return ModelResponse(status="success", code=200, data=data)
+        return Response(status="success", code=200, data=data)
 
-    async def _send_response(self, send, resp: ModelResponse) -> None:
+    async def _send_response(self, send, resp: Response) -> None:
         try:
             payload = getattr(resp, "__json__", None)
             if payload is None:
@@ -370,7 +355,7 @@ class API:
         port=8000,
         reload=False,
         workers=1,
-        log_level="debug",
+        log_level='debug',
         app_import_string=None,
         **kwargs,
     ):
@@ -463,10 +448,3 @@ class API:
 
     def delete(self, path: Path, name: Maybe(Str) = None, mids=None):
         return self.route("DELETE", path, name, mids)
-
-    def options(self, path: Path, name: Maybe(Str) = None, mids=None):
-        return self.route("OPTIONS", path, name, mids)
-
-    def head(self, path: Str, name: Maybe(Str) = None, mids=None):
-        return self.route("HEAD", path, name, mids)
-

@@ -1,3 +1,2 @@
-starlette
-uvicorn
 git+https://github.com/ximenesyuri/typed
+git+https://github.com/ximenesyuri/utils

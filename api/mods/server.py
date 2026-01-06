@@ -1,6 +1,5 @@
 import asyncio
 import traceback
-from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import urlsplit
 
 _STATUS_REASONS = {
@@ -20,27 +19,15 @@ _STATUS_REASONS = {
     503: "Service Unavailable",
 }
 
-
 class BuiltinHTTPServer:
-    """
-    Minimal HTTP/1.1 ASGI server using only the Python standard library.
-
-    Compatible with Starlette / your API class (ASGI 3).
-    """
-
-    def __init__(self, app, host: str = "127.0.0.1", port: int = 8000):
+    def __init__(self, app, host="127.0.0.1", port=8000):
         self.app = app
         self.host = host
         self.port = port
-        self._server: Optional[asyncio.AbstractServer] = None
+        self._server = None
 
-    async def _handle_client(
-        self,
-        reader: asyncio.StreamReader,
-        writer: asyncio.StreamWriter,
-    ) -> None:
+    async def _handle_client(self, reader, writer):
         try:
-            # ---- Read request line + headers ----
             try:
                 header_data = await reader.readuntil(b"\r\n\r\n")
             except (asyncio.IncompleteReadError, asyncio.LimitOverrunError):
@@ -74,13 +61,12 @@ class BuiltinHTTPServer:
             query_string = (parsed_url.query or "").encode("ascii", "ignore")
 
             # ---- Parse headers ----
-            headers: List[Tuple[bytes, bytes]] = []
-            headers_dict: Dict[str, str] = {}
+            headers=[]
+            headers_dict={}
             for line in header_lines:
                 if not line:
                     continue
                 if ":" not in line:
-                    # Ignore malformed header lines
                     continue
                 name, value = line.split(":", 1)
                 name = name.strip()
@@ -116,7 +102,7 @@ class BuiltinHTTPServer:
             if isinstance(server_addr, tuple):
                 server_host, server_port = server_addr[0], server_addr[1]
 
-            scope: Dict[str, Any] = {
+            scope = {
                 "type": "http",
                 "asgi": {"version": "3.0", "spec_version": "2.3"},
                 "http_version": http_version.replace("HTTP/", ""),
@@ -130,12 +116,11 @@ class BuiltinHTTPServer:
                 "server": (server_host, server_port),
             }
 
-            # ---- ASGI receive/send ----
             request_body = body
             request_sent = False
             disconnected = False
 
-            async def receive() -> Dict[str, Any]:
+            async def receive():
                 nonlocal request_sent, disconnected
                 if not request_sent:
                     request_sent = True
@@ -153,7 +138,7 @@ class BuiltinHTTPServer:
             response_started = False
             response_ended = False
 
-            async def send(message: Dict[str, Any]) -> None:
+            async def send(message):
                 nonlocal response_started, response_ended
 
                 if response_ended:
@@ -169,7 +154,7 @@ class BuiltinHTTPServer:
                     reason = _STATUS_REASONS.get(status, "Unknown")
                     status_line = f"HTTP/1.1 {status} {reason}\r\n"
 
-                    msg_headers: List[Tuple[bytes, bytes]] = message.get(
+                    msg_headers = message.get(
                         "headers", []
                     )
 
@@ -230,12 +215,7 @@ class BuiltinHTTPServer:
             except Exception:
                 pass
 
-    async def _send_simple_response(
-        self,
-        writer: asyncio.StreamWriter,
-        status: int,
-        body: bytes,
-    ) -> None:
+    async def _send_simple_response(self, writer, status, body):
         reason = _STATUS_REASONS.get(status, "Unknown")
         status_line = f"HTTP/1.1 {status} {reason}\r\n"
         headers = (
@@ -252,7 +232,7 @@ class BuiltinHTTPServer:
         except Exception:
             pass
 
-    async def serve_forever(self) -> None:
+    async def serve_forever(self):
         self._server = await asyncio.start_server(
             self._handle_client, self.host, self.port
         )
@@ -262,7 +242,6 @@ class BuiltinHTTPServer:
             await self._server.serve_forever()
 
 
-def run(app, host: str = "127.0.0.1", port: int = 8000) -> None:
+def run(app, host="127.0.0.1", port=8000):
     server = BuiltinHTTPServer(app, host=host, port=port)
     asyncio.run(server.serve_forever())
-
