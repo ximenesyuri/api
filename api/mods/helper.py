@@ -19,6 +19,7 @@ from typed.mods.helper.helper import (
 )
 
 blocked_ips = {}
+rate_limits = {}
 _auth_failures = {}
 _ROUTER_CLASS = None
 _api_name = None
@@ -456,6 +457,69 @@ def _enforce_token_auth(request, mids):
 
     raise Error(status_code=500, detail="Unsupported authentication type")
 
+def _enforce_rate_limit(request, mids):
+    from api.mods.mids import Limit
+    from datetime import datetime, timedelta
+
+    if not mids:
+        return
+
+    limit_mid = None
+    for m in mids:
+        if isinstance(m, Limit):
+            limit_mid = m
+            break
+
+    if limit_mid is None:
+        return
+
+    client = getattr(request, "client", None)
+    if isinstance(client, tuple) and client:
+        ip = client[0]
+    else:
+        ip = "unknown"
+
+    now = datetime.now()
+
+    ip_record = rate_limits.get(ip, {})
+    if "blocked_until" in ip_record:
+        if ip_record["blocked_until"] > now:
+            raise Error(
+                status_code=429,
+                detail=ip_record.get("message", limit_mid.message),
+            )
+        else:
+            if ip in rate_limits:
+                remaining_timestamps = ip_record.get("timestamps", [])
+                window_start = now - timedelta(minutes=1)
+                remaining_timestamps = [t for t in remaining_timestamps if t >= window_start]
+                rate_limits[ip] = {"timestamps": remaining_timestamps}
+            else:
+                rate_limits[ip] = {"timestamps": []}
+
+    timestamps = ip_record.get("timestamps", [])
+
+    window_start = now - timedelta(minutes=1)
+    timestamps = [t for t in timestamps if t >= window_start]
+
+    timestamps.append(now)
+
+    ip_record["timestamps"] = timestamps
+    rate_limits[ip] = ip_record
+
+    if len(timestamps) > int(limit_mid.limit):
+        blocked_until = now + timedelta(minutes=int(limit_mid.block_minutes))
+        rate_limits[ip] = {
+            "timestamps": timestamps,
+            "blocked_until": blocked_until,
+            "message": limit_mid.message
+        }
+
+        raise Error(
+            status_code=429,
+            detail=limit_mid.message,
+        )
+
 
 # ------------------------
 # Handler factory
@@ -466,7 +530,7 @@ def _make_handler(func, method, mids=None):
       - builds kwargs from Request (path/query/body/headers/cookies)
       - checks typed domain/codomain
       - runs sync functions in a thread
-    Note: middlewares (auth/block) are *not* applied here; they are
+    Note: middlewares are *not* applied here; they are
     applied centrally in api.API.__call__.
     """
     original = _unwrap(func)

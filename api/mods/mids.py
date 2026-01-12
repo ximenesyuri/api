@@ -4,15 +4,15 @@ from utils.types import Nat
 AuthType = Enum(Str, 'token', 'basic')
 
 @model
-class Middleware:
+class Mid:
     pass
 
 @model
-class Auth(Middleware):
+class Auth(Mid):
     type: AuthType
 
 @model
-class Block(Middleware):
+class Block(Mid):
     codes: List(Nat)=[]
     attempts: Nat=3
     interval: Nat=30
@@ -21,5 +21,11 @@ class Block(Middleware):
 
 @model
 class Token(Auth):
-    type: AuthType = 'token'
+    type: AuthType='token'
     token: Str
+
+@model
+class Limit(Mid):
+    limit: Nat=20
+    block_minutes: Nat=5
+    message: Str="Too many requests."

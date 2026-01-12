@@ -7,6 +7,7 @@ from api.mods.helper import (
     _set_api_name,
     _enforce_ip_block,
     _enforce_token_auth,
+    _enforce_rate_limit,
     Error,
     Request,
 )
@@ -132,6 +133,7 @@ class API:
             if effective_mids:
                 _enforce_ip_block(request, effective_mids, status_code=None)
                 _enforce_token_auth(request, effective_mids)
+                _enforce_rate_limit(request, effective_mids)
 
             result = await route.handler(request)
 
