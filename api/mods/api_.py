@@ -1,8 +1,8 @@
 import logging
 import json
-from typed import model, List, Function, Maybe, Str
+from typed import model, typed, List, Function, Maybe, Str, Union
+from typed.models import MODEL, LAZY_MODEL
 from utils.types import Path
-
 from api.mods.helper import (
     _set_api_name,
     _enforce_ip_block,
@@ -14,6 +14,8 @@ from api.mods.helper import (
 from api.mods.response import Response
 from api.mods.log import log
 from api.mods.router import Router
+import inspect
+from typing import get_type_hints
 
 
 @model
@@ -23,6 +25,7 @@ class _RouteEntry:
     handler: Function
     name: Str
     mids: Maybe(List)
+    hint: Str
 
 
 def _match_path(template, path):
@@ -66,6 +69,123 @@ class API:
             'CRITICAL': logging.CRITICAL
         }
         self._logger.setLevel(log_levels.get(log_level.upper(), logging.INFO))
+        self._add_help_routes()
+
+    def _find_matching_route(self, method, path):
+        """Find the right route handler for help paths."""
+        for r in self._routes:
+            params = _match_path(r.path, path)
+            if params is not None and r.method == method.upper():
+                return r
+        return None
+
+    def _add_help_routes(self):
+        """Add help routes to the API."""
+        async def _help_main(request):
+            endpoints = []
+            for route in self._routes:
+                if route.path != "/help" and not route.path.startswith("/help/"):
+                    endpoints.append({
+                        "method": route.method,
+                        "path": route.path,
+                        "name": route.name
+                    })
+            return Response(
+                status="success",
+                code=200,
+                data=endpoints,
+                message="Main helper endpoint. For help with specific endpoints, try '/help/<endpoint>'"
+            )
+        main_entry = _RouteEntry(
+            method="GET",
+            path="/help",
+            handler=_help_main,
+            name="help",
+            mids=None,
+            hint="Show available API endpoints"
+        )
+        self._routes.append(main_entry)
+        async def _help_specific(request):
+            requested_path = request.path[len('/help/'):].strip()
+            if not requested_path:
+                raise Error(404, "No specific endpoint provided for help")
+            found_route = None
+            for route in self._routes:
+                if (route.path != "/help" and 
+                    not route.path.startswith("/help/") and
+                    (f"/help/{route.name}" == request.path or 
+                     route.path.rstrip('/') == f"/{requested_path.rstrip('/')}")):
+                    found_route = route
+                    break
+            if not found_route:
+                for route in self._routes:
+                    if (route.path != "/help" and not route.path.startswith("/help/")):
+                        route_parts = route.path.strip('/').split('/')
+                        req_parts = requested_path.strip('/').split('/')
+                        if (route_parts and req_parts and
+                            (route_parts[0] == req_parts[0] or route.path == f"/{requested_path}")):
+                            found_route = route
+                            break
+            if not found_route:
+                raise Error(404, f"No endpoint found matching '{requested_path}' for help")
+            handler = found_route.handler
+            sig = inspect.signature(found_route.handler)
+            hints = get_type_hints(found_route.handler)
+
+            params_info = {}
+            for name, p in sig.parameters.items():
+                if name == 'request':
+                    continue
+                hinted_type = hints.get(name)
+                if hinted_type:
+                    type_str = getattr(hinted_type, '__name__', str(hinted_type))
+                    if hasattr(hinted_type, '__annotations__'):
+                        type_name = getattr(hinted_type, '__name__', 'TypedModel')
+                        params_info[name] = {
+                            'type': 'model',
+                            'class': type_name,
+                            'details': getattr(hinted_type, '__annotations__', {}),
+                        }
+                    else:
+                        params_info[name] = {
+                            'type': type_str,
+                            'default': p.default if p.default is not inspect.Parameter.empty else None
+                        }
+                else:
+                    params_info[name] = {
+                        'type': 'Any',
+                        'default': p.default if p.default is not inspect.Parameter.empty else None
+                    }
+            return_annotation = sig.return_annotation
+            if hasattr(return_annotation, '__name__'):
+                return_type = return_annotation.__name__
+            else:
+                return_type = str(return_annotation)
+            route_help_info = {
+                "method": found_route.method,
+                "path": found_route.path,
+                "name": found_route.name,
+                "middlewares": [m.__class__.__name__ for m in found_route.mids] if found_route.mids else None,
+                "parameters": params_info,
+                "returns": return_type,
+                "description": getattr(found_route.handler, '__doc__', "No description provided"),
+            }
+            return Response(
+                status="success",
+                code=200,
+                data=route_help_info,
+                message=f"Detailed help for endpoint '{found_route.name}'"
+            )
+
+        detail_entry = _RouteEntry(
+            method="GET",
+            path="/help/{endpoint}",
+            handler=_help_specific,
+            name="help_detail",
+            mids=None,
+            hint=f"Detailed help on given endpoint."
+        )
+        self._routes.append(detail_entry)
 
     async def __call__(self, scope, receive, send):
         if scope.get("type") != "http":
@@ -102,134 +222,166 @@ class API:
             else:
                 more_body = False
 
-        try:
-            route, path_params = self._match_route(method, path)
-        except Error as e:
-            log.warning(
-                f"Error {e.status_code}: {method} {path_for_log} -> {e.detail}",
-                router_name=client_ip,
-            )
-            resp_model = Response(
-                status="failure",
-                code=e.status_code,
-                data=e.detail,
-            )
-            await self._send_response(send, resp_model)
-            return
+        if path == "/help":
+            route = next((r for r in self._routes if r.path == "/help"), None)
+            route_params = {}
+        elif path.startswith("/help/"):
+            route = next((r for r in self._routes if r.path == "/help/{endpoint}"), None)
+            route_params = {"endpoint": path[6:]}
+        else:
+            try:
+                route, route_params = self._match_route(method, path)
+            except Error as e:
+                log.warning(
+                    f"Error {e.status_code}: {method} {path_for_log} -> {e.detail}",
+                    router_name=client_ip,
+                )
+                resp_model = Response(
+                    status="failure",
+                    code=e.status_code,
+                    data=e.detail,
+                    message=e.detail,
+                )
+                await self._send_response(send, resp_model)
+                return
 
         request = Request(
             method=method,
             path=path,
             query_string=query_string,
             headers=headers,
-            path_params=path_params,
+            path_params=route_params,
             body=body,
             client=client,
         )
 
-        effective_mids = route.mids
+        effective_mids = route.mids if hasattr(route, 'mids') and route.path != "/help" and not route.path.startswith("/help/") else None
 
-        try:
-            if effective_mids:
-                _enforce_ip_block(request, effective_mids, status_code=None)
-                _enforce_token_auth(request, effective_mids)
-                _enforce_rate_limit(request, effective_mids)
-
+        if route.path == "/help" or route.path.startswith("/help/"):
             result = await route.handler(request)
-
             resp_model = self._to_response_model(result)
+        else:
+            try:
+                if effective_mids:
+                    _enforce_ip_block(request, effective_mids, status_code=None)
+                    _enforce_token_auth(request, effective_mids)
+                    _enforce_rate_limit(request, effective_mids)
 
-            if effective_mids:
-                try:
-                    _enforce_ip_block(request, effective_mids, status_code=resp_model.code)
-                except Error as block_exc:
+                result = await route.handler(request)
+
+                resp_model = self._to_response_model(result)
+
+                if effective_mids:
+                    try:
+                        _enforce_ip_block(request, effective_mids, status_code=resp_model.code)
+                    except Error as block_exc:
+                        resp_model = Response(
+                            status="failure",
+                            code=block_exc.status_code,
+                            data=block_exc.detail,
+                            message=block_exc.detail,
+                        )
+
+            except Error as exc:
+                msg = f"Error {exc.status_code}: {method} {path_for_log} -> {exc.detail}"
+                log.client(msg, router_name=client_ip)
+                client_log_done = True
+
+                if effective_mids:
+                    try:
+                        _enforce_ip_block(request, effective_mids, status_code=exc.status_code)
+                    except Error as block_exc:
+                        resp_model = Response(
+                            status="failure",
+                            code=block_exc.status_code,
+                            data=block_exc.detail,
+                            message=block_exc.detail,
+                        )
+                    else:
+                        resp_model = Response(
+                            status="failure",
+                            code=exc.status_code,
+                            data=exc.detail,
+                            message=exc.detail,
+                        )
+                else:
                     resp_model = Response(
                         status="failure",
-                        code=block_exc.status_code,
-                        data=block_exc.detail,
+                        code=exc.status_code,
+                        data=exc.detail,
+                        message=exc.detail,
                     )
 
-        except Error as exc:
-            msg = f"Error {exc.status_code}: {method} {path_for_log} -> {exc.detail}"
-            log.client(msg, router_name=client_ip)
-            client_log_done = True
+            except TypeError as exc:
+                log.client(
+                    f"Error 422: {method} {path_for_log} -> {exc}",
+                    router_name=client_ip,
+                )
+                client_log_done = True
 
-            if effective_mids:
-                try:
-                    _enforce_ip_block(request, effective_mids, status_code=exc.status_code)
-                except Error as block_exc:
-                    exc = block_exc
-
-            resp_model = Response(
-                status="failure",
-                code=exc.status_code,
-                data=exc.detail,
-            )
-
-        except TypeError as exc:
-            log.client(
-                f"Error 422: {method} {path_for_log} -> {exc}",
-                router_name=client_ip,
-            )
-            client_log_done = True
-
-            if effective_mids:
-                try:
-                    _enforce_ip_block(request, effective_mids, status_code=422)
-                except Error as block_exc:
-                    resp_model = Response(
-                        status="failure",
-                        code=block_exc.status_code,
-                        data=block_exc.detail,
-                    )
+                if effective_mids:
+                    try:
+                        _enforce_ip_block(request, effective_mids, status_code=422)
+                    except Error as block_exc:
+                        resp_model = Response(
+                            status="failure",
+                            code=block_exc.status_code,
+                            data=block_exc.detail,
+                            message=block_exc.detail,
+                        )
+                    else:
+                        resp_model = Response(
+                            status="failure",
+                            code=422,
+                            data=str(exc),
+                            message=str(exc),
+                        )
                 else:
                     resp_model = Response(
                         status="failure",
                         code=422,
                         data=str(exc),
+                        message=str(exc),
                     )
-            else:
-                resp_model = Response(
-                    status="failure",
-                    code=422,
-                    data=str(exc),
+
+            except Exception as exc:
+                log.error(
+                    f"Unhandled error on {method} {path_for_log}: {exc}",
+                    router_name=self.name,
                 )
+                detail = str(exc) if hasattr(self, '_debug') and self._debug else "Internal Server Error"
+                log.client(
+                    f"Error 500: {method} {path_for_log} -> {detail}",
+                    router_name=client_ip,
+                )
+                client_log_done = True
 
-        except Exception as exc:
-            log.error(
-                f"Unhandled error on {method} {path_for_log}: {exc}",
-                router_name=self.name,
-            )
-            detail = str(exc) if self._debug else "Internal Server Error"
-            log.client(
-                f"Error 500: {method} {path_for_log} -> {detail}",
-                router_name=client_ip,
-            )
-            client_log_done = True
-
-            if effective_mids:
-                try:
-                    _enforce_ip_block(request, effective_mids, status_code=500)
-                except Error as block_exc:
-                    resp_model = Response(
-                        status="failure",
-                        code=block_exc.status_code,
-                        data=block_exc.detail,
-                    )
+                if effective_mids:
+                    try:
+                        _enforce_ip_block(request, effective_mids, status_code=500)
+                    except Error as block_exc:
+                        resp_model = Response(
+                            status="failure",
+                            code=block_exc.status_code,
+                            data=block_exc.detail,
+                            message=block_exc.detail,
+                        )
+                    else:
+                        resp_model = Response(
+                            status="failure",
+                            code=500,
+                            data=detail,
+                            message=detail,
+                        )
                 else:
                     resp_model = Response(
                         status="failure",
                         code=500,
                         data=detail,
+                        message=detail,
                     )
-            else:
-                resp_model = Response(
-                    status="failure",
-                    code=500,
-                    data=detail,
-                )
 
-        if not client_log_done:
+        if not client_log_done and route.path != "/help" and not route.path.startswith("/help/"):
             code = int(resp_model.code)
             if 200 <= code < 400:
                 log.client(
@@ -237,11 +389,12 @@ class API:
                     router_name=client_ip,
                 )
             else:
-                data = resp_model.data
-                if isinstance(data, dict) and "detail" in data:
-                    detail = data["detail"]
+                # Look for message field in response first before falling back to data field
+                message = resp_model.message or resp_model.data
+                if isinstance(message, dict) and "detail" in message:
+                    detail = message["detail"]
                 else:
-                    detail = data
+                    detail = str(message)
                 log.client(
                     f"Error {code}: {method} {path_for_log} -> {detail}",
                     router_name=client_ip,
@@ -251,10 +404,11 @@ class API:
 
     # ------------------------------------------------------------------
     # Internal helpers
-    # ------------------------------------------------------------------
-
+    # ------------------------------------------------------------------ 
     def _match_route(self, method, path):
         for r in self._routes:
+            if r.path == "/help" or r.path.startswith("/help/"):
+                continue
             if r.method != method.upper():
                 continue
             params = _match_path(r.path, path)
@@ -264,6 +418,8 @@ class API:
 
     def _to_response_model(self, result):
         if isinstance(result, Response):
+            if hasattr(result, 'message') and result.message is not None:
+                return result
             return result
 
         if hasattr(result, "__json__"):
@@ -286,12 +442,18 @@ class API:
                     "status": resp.status,
                     "code": resp.code,
                     "data": resp.data,
+                    "message": resp.message,
+                } if hasattr(resp, 'message') else {
+                    "status": resp.status,
+                    "code": resp.code,
+                    "data": resp.data,
                 }
         except Exception:
             payload = {
                 "status": getattr(resp, "status", "failure"),
                 "code": getattr(resp, "code", 500),
                 "data": getattr(resp, "data", {"detail": "Serialization error"}),
+                "message": getattr(resp, "message", None),
             }
 
         body_bytes = json.dumps(payload).encode("utf-8")
@@ -316,36 +478,8 @@ class API:
         )
 
     # ------------------------------------------------------------------
-    # Logging convenience
+    # App Properties
     # ------------------------------------------------------------------
-
-    def log(self, level, message: str, *args, **kwargs) -> None:
-        if isinstance(level, str):
-            lvl = level.lower().strip()
-            level_map = {
-                "debug": logging.DEBUG,
-                "info": logging.INFO,
-                "warning": logging.WARNING,
-                "error": logging.ERROR,
-                "critical": logging.CRITICAL,
-            }
-            lvlno = level_map.get(lvl, logging.INFO)
-        else:
-            lvlno = int(level)
-        self._logger.log(lvlno, message, *args, **kwargs)
-
-    def debug(self, message: str, *args, **kwargs) -> None:
-        self.log("debug", message, *args, **kwargs)
-
-    def warning(self, message: str, *args, **kwargs) -> None:
-        self.log("warning", message, *args, **kwargs)
-
-    warn = warning
-
-    def error(self, message: str, *args, **kwargs) -> None:
-        self.log("error", message, *args, **kwargs)
-
-    err = error
 
     @property
     def app(self):
@@ -355,21 +489,12 @@ class API:
         self,
         host="127.0.0.1",
         port=8000,
-        reload=False,
-        workers=1,
         log_level='debug',
         app_import_string=None,
         **kwargs,
     ):
         from api.mods.server import run as run_builtin
-        from api.mods.log import log as _log
         import logging as _logging
-
-        if reload or workers != 1:
-            _log.warning(
-                "reload/workers options are not supported by the builtin server; "
-                "running a single-process server without auto-reload."
-            )
 
         lvl_map = {
             "debug": _logging.DEBUG,
@@ -411,6 +536,7 @@ class API:
                 handler=handler,
                 name=r.name,
                 mids=effective_mids,
+                hint=f"Route: {r.func.__name__ if hasattr(r, 'func') else str(r)}"
             )
             self._routes.append(entry)
 
@@ -422,6 +548,17 @@ class API:
 
         def decorator(func):
             effective_mids = self.mids if mids is None else mids
+            typed_func = typed(func, lazy=False)
+            if typed_func.cod is not Response:
+                raise TypeError(
+                    "..."
+                )
+            if method.upper() in ('POST', 'PUT', 'PATCH'):
+                if len(typed_func.dom) != 1 or not typed_func.dom[0] in Union(MODEL, LAZY_MODEL):
+                    raise TypeError(
+                        "aaaaaa"
+                    )
+
             handler = _make_handler(func, method, mids=effective_mids)
             route_name = name or _unwrap(func).__name__
             entry = _RouteEntry(
@@ -430,6 +567,7 @@ class API:
                 handler=handler,
                 name=route_name,
                 mids=effective_mids,
+                hint=f"Endpoint: {func.__name__}"
             )
             self._routes.append(entry)
             return func
@@ -450,3 +588,4 @@ class API:
 
     def delete(self, path: Path, name: Maybe(Str) = None, mids=None):
         return self.route("DELETE", path, name, mids)
+
