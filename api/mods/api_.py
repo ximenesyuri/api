@@ -2,7 +2,7 @@ import logging
 import json
 from typed import model, typed, List, Function, Maybe, Str, Union
 from typed.models import MODEL, LAZY_MODEL
-from utils.types import Path
+from utils.types import Path, Json
 from api.mods.helper import (
     _set_api_name,
     _enforce_ip_block,
@@ -111,9 +111,9 @@ class API:
                 raise Error(404, "No specific endpoint provided for help")
             found_route = None
             for route in self._routes:
-                if (route.path != "/help" and 
+                if (route.path != "/help" and
                     not route.path.startswith("/help/") and
-                    (f"/help/{route.name}" == request.path or 
+                    (f"/help/{route.name}" == request.path or
                      route.path.rstrip('/') == f"/{requested_path.rstrip('/')}")):
                     found_route = route
                     break
@@ -239,8 +239,8 @@ class API:
                 resp_model = Response(
                     status="failure",
                     code=e.status_code,
-                    data=e.detail,
-                    message=e.detail,
+                    data=e.detail if e.detail in Json else None,
+                    message=e.detail if e.detail in Str else None
                 )
                 await self._send_response(send, resp_model)
                 return
@@ -278,8 +278,8 @@ class API:
                         resp_model = Response(
                             status="failure",
                             code=block_exc.status_code,
-                            data=block_exc.detail,
-                            message=block_exc.detail,
+                            data=block_exc.detail if block_exc.detail in Json else None,
+                            message=block_exc.detail if block_exc.detail in Str else None,
                         )
 
             except Error as exc:
@@ -294,22 +294,22 @@ class API:
                         resp_model = Response(
                             status="failure",
                             code=block_exc.status_code,
-                            data=block_exc.detail,
-                            message=block_exc.detail,
+                            data=block_exc.detail if block_exc.detail in Json else None,
+                            message=block_exc.detail if block_exc.detail in Str else None,
                         )
                     else:
                         resp_model = Response(
                             status="failure",
                             code=exc.status_code,
-                            data=exc.detail,
-                            message=exc.detail,
+                            data=exc.detail if exc.detail in Json else None,
+                            message=exc.detail if exc.detail in Str else None,
                         )
                 else:
                     resp_model = Response(
                         status="failure",
                         code=exc.status_code,
-                        data=exc.detail,
-                        message=exc.detail,
+                        data=exc.detail if exc.detail in Json else None,
+                        message=exc.detail if exc.detail in Str else None,
                     )
 
             except TypeError as exc:
@@ -326,22 +326,22 @@ class API:
                         resp_model = Response(
                             status="failure",
                             code=block_exc.status_code,
-                            data=block_exc.detail,
-                            message=block_exc.detail,
+                            data=block_exc.detail if block_exc.detail in Json else None,
+                            message=block_exc.detail if block_exc.detail in Str else None,
                         )
                     else:
                         resp_model = Response(
                             status="failure",
                             code=422,
-                            data=str(exc),
-                            message=str(exc),
+                            data=exc if exc in Json else None,
+                            message=exc if exc in Str else None,
                         )
                 else:
                     resp_model = Response(
                         status="failure",
                         code=422,
-                        data=str(exc),
-                        message=str(exc),
+                        data=exc if exc in Json else None,
+                        message=exc if exc in Str else None,
                     )
 
             except Exception as exc:
@@ -363,22 +363,22 @@ class API:
                         resp_model = Response(
                             status="failure",
                             code=block_exc.status_code,
-                            data=block_exc.detail,
-                            message=block_exc.detail,
+                            data=None,
+                            message=block_exc.detail if block_exc.detail in Str else None,
                         )
                     else:
                         resp_model = Response(
                             status="failure",
                             code=500,
-                            data=detail,
-                            message=detail,
+                            data=detail if detail in Json else None,
+                            message=detail if detail in Str else None,
                         )
                 else:
                     resp_model = Response(
                         status="failure",
                         code=500,
-                        data=detail,
-                        message=detail,
+                        data=detail if detail in Json else None,
+                        message=detail if detail in Str else None,
                     )
 
         if not client_log_done and route.path != "/help" and not route.path.startswith("/help/"):
@@ -429,10 +429,10 @@ class API:
         try:
             json.dumps(result)
             data = result
+            return Response(status="success", code=200, data=data)
         except TypeError:
-            data = str(result)
-
-        return Response(status="success", code=200, data=data)
+            if result in Str:
+                return Response(status="success", code=200, message=result)
 
     async def _send_response(self, send, resp: Response) -> None:
         try:
