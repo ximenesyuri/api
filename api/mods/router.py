@@ -26,8 +26,17 @@ class Router:
 
         self.children = list(children) if children is not None else []
 
-    def include_router(self, route: "Router"):
-        self.children.append(route)
+    def include_router(self, route: "Router", prefix: str = ""):
+        if prefix:
+            if not prefix.startswith("/"):
+                prefix = "/" + prefix
+
+            group = Router(path=prefix)
+            group.children.append(route)
+            self.children.append(group)
+        else:
+            self.children.append(route)
+
         return route
 
     def route(self, method, path, name=None, mids=None):
