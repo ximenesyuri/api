@@ -519,7 +519,7 @@ class API:
           - a Route instance (possibly with nested .children).
         """
         from api.mods.helper import _make_handler
-        from api.mods.router import Route as RouteNode
+        from api.mods.router import Router as RouteNode
         try:
             from api.mods.router import Router as RouterType
         except Exception:
