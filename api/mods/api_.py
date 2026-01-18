@@ -512,73 +512,48 @@ class API:
     # Routing
     # ------------------------------------------------------------------
 
-    def include_router(self, router, prefix: Path = ""):
-        """
-        Include either:
-          - a traditional Router instance (with ._routes, .prefix, .mids), or
-          - a Route instance (possibly with nested .children).
-        """
+    def include_router(self, router, prefix: Path = ""): 
         from api.mods.helper import _make_handler
-        from api.mods.router import Router as RouteNode
-        try:
-            from api.mods.router import Router as RouterType
-        except Exception:
-            RouterType = type(None)
+        from api.mods.router import Router as RouterNode
+
+        if not isinstance(router, RouterNode):
+            raise TypeError(f"Unsupported router type for include_router: {type(router)!r}")
 
         prefix = prefix or ""
         if prefix and not prefix.startswith("/"):
             prefix = "/" + prefix
 
-        def walk_route(route_obj, parent_path="", inherited_mids=None):
-            base_path = (parent_path or "") + (route_obj.path or "")
-
-            route_level_mids = route_obj.mids if getattr(route_obj, "mids", None) is not None else inherited_mids
-
-            if getattr(route_obj, "method", None) and getattr(route_obj, "func", None):
-                method = route_obj.method.upper()
+        def walk(node: RouterNode, parent_path: str = "", inherited_mids=None):
+            base_path = (parent_path or "") + (node.path or "")
+            node_mids = node.mids if node.mids is not None else inherited_mids
+            if getattr(node, "method", None) and getattr(node, "func", None):
+                method = node.method.upper()
                 full_path = base_path or "/"
+                effective_mids = node_mids if node_mids is not None else self.mids
 
-                effective_mids = route_level_mids if route_level_mids is not None else self.mids
-
-                handler = _make_handler(route_obj.func, method, mids=effective_mids)
+                handler = _make_handler(node.func, method, mids=effective_mids)
                 entry = _RouteEntry(
                     method=method,
                     path=full_path,
                     handler=handler,
-                    name=route_obj.name,
+                    name=node.name,
                     mids=effective_mids,
-                    hint=f"Route: {route_obj.func.__name__ if hasattr(route_obj, 'func') else str(route_obj)}",
+                    hint=f"Route: {getattr(node.func, '__name__', repr(node.func))}",
                 )
                 self._routes.append(entry)
 
-            for child in getattr(route_obj, "children", []) or []:
-                walk_route(
+            for child in getattr(node, "children", []) or []:
+                walk(
                     child,
                     parent_path=base_path,
-                    inherited_mids=route_level_mids,
+                    inherited_mids=node_mids,
                 )
 
-        if isinstance(router, RouterType):
-            base_prefix = prefix + getattr(router, "prefix", "") or ""
-            router_mids = getattr(router, "mids", None)
-
-            for r in router._routes:
-                walk_route(
-                    r,
-                    parent_path=base_prefix,
-                    inherited_mids=router_mids,
-                )
-            return
-
-        if isinstance(router, RouteNode):
-            walk_route(
-                router,
-                parent_path=prefix,
-                inherited_mids=router.mids,
-            )
-            return
-
-        raise TypeError(f"Unsupported router type for include_router: {type(router)!r}") 
+        walk(
+            router,
+            parent_path=prefix,
+            inherited_mids=router.mids,
+        )
 
     def route(self, method: Str, path: Path, name: Maybe(Str) = None, mids=None):
         from api.mods.helper import _make_handler, _unwrap
