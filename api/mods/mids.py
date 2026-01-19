@@ -13,11 +13,11 @@ class Auth(Mid):
 
 @model
 class Block(Mid):
-    codes: List(Nat)=[]
+    codes: List(Nat)=[401, 404]
     attempts: Nat=3
     interval: Nat=30
     block_minutes: Int=-1
-    message: Str
+    message: Str="Blocked IP."
 
 @model
 class Token(Auth):
