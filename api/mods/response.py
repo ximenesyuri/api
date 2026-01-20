@@ -16,4 +16,4 @@ class response:
 
     @typed
     def failure(code: Nat=400, message: Maybe(Str)=None, data: Maybe(Json)=None) -> Response:
-        return Response(status="failure", code=code, data=data)
+        return Response(status="failure", message=message, code=code, data=data)
