@@ -29,3 +29,9 @@ class Limit(Mid):
     limit: Nat=20
     block_minutes: Nat=5
     message: Str="Too many requests."
+
+Mid.__display__   = "Mid"
+Auth.__display__  = "Auth"
+Block.__display__ = "Block"
+Token.__display__ = "Token"
+Limit.__display__ = "Limit"
