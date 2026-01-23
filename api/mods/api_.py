@@ -292,17 +292,6 @@ class API:
 
                 resp_model = self._to_response_model(result)
 
-                if effective_mids:
-                    try:
-                        _enforce_ip_block(request, effective_mids, status_code=resp_model.code)
-                    except Error as block_exc:
-                        resp_model = Response(
-                            status="failure",
-                            code=block_exc.status_code,
-                            data=block_exc.detail if block_exc.detail in Json else None,
-                            message=block_exc.detail if block_exc.detail in Str else None,
-                        )
-
             except Error as exc:
                 msg = f"Error {exc.status_code}: {method} {path_for_log} -> {exc.detail}"
                 log.client(msg, router_name=client_ip)
@@ -334,6 +323,9 @@ class API:
                     )
 
             except TypeError as exc:
+                from typed import TYPE
+                print(str(exc).strip())
+                print(TYPE(exc))
                 log.client(
                     f"Error 422: {method} {path_for_log} -> {exc}",
                     router_name=client_ip,
@@ -354,8 +346,8 @@ class API:
                         resp_model = Response(
                             status="failure",
                             code=422,
-                            data=exc if exc in Json else None,
-                            message=exc if exc in Str else None,
+                            data=None,
+                            message=str(exc).strip(),
                         )
                 else:
                     resp_model = Response(
@@ -385,21 +377,21 @@ class API:
                             status="failure",
                             code=block_exc.status_code,
                             data=None,
-                            message=block_exc.detail if block_exc.detail in Str else None,
+                            message=str(block_exc.detail) if block_exc.detail else None,
                         )
                     else:
                         resp_model = Response(
                             status="failure",
                             code=500,
-                            data=detail if detail in Json else None,
-                            message=detail if detail in Str else None,
+                            data=None,
+                            message=detail,
                         )
                 else:
                     resp_model = Response(
                         status="failure",
                         code=500,
-                        data=detail if detail in Json else None,
-                        message=detail if detail in Str else None,
+                        data=None,
+                        message=detail,
                     )
 
         if not client_log_done and route.path != "/help" and not route.path.startswith("/help/"):
