@@ -323,9 +323,6 @@ class API:
                     )
 
             except TypeError as exc:
-                from typed import TYPE
-                print(str(exc).strip())
-                print(TYPE(exc))
                 log.client(
                     f"Error 422: {method} {path_for_log} -> {exc}",
                     router_name=client_ip,
