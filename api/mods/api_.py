@@ -1,7 +1,8 @@
 import logging
 import json
-from typed import model, typed, List, Function, Maybe, Str, Union
+from typed import name as _name, model, typed, List, Function, Maybe, Str, Union
 from typed.models import MODEL, LAZY_MODEL
+from typed.mods.helper.helper import _unwrap
 from utils.types import Path, Json
 from api.mods.helper import (
     _set_api_name,
@@ -13,7 +14,6 @@ from api.mods.helper import (
 )
 from api.mods.response import Response
 from api.mods.log import log
-from api.mods.router import Router
 import inspect
 from typing import get_type_hints
 
@@ -24,6 +24,7 @@ class _RouteEntry:
     path: Str
     handler: Function
     name: Str
+    func: Maybe(Function)=None
     mids: Maybe(List)
     hint: Str
 
@@ -105,18 +106,21 @@ class API:
             hint="Show available API endpoints"
         )
         self._routes.append(main_entry)
+
         async def _help_specific(request):
             requested_path = request.path[len('/help/'):].strip()
             if not requested_path:
                 raise Error(404, "No specific endpoint provided for help")
+
             found_route = None
             for route in self._routes:
                 if (route.path != "/help" and
                     not route.path.startswith("/help/") and
                     (f"/help/{route.name}" == request.path or
-                     route.path.rstrip('/') == f"/{requested_path.rstrip('/')}")):
+                    route.path.rstrip('/') == f"/{requested_path.rstrip('/')}")):
                     found_route = route
                     break
+
             if not found_route:
                 for route in self._routes:
                     if (route.path != "/help" and not route.path.startswith("/help/")):
@@ -126,50 +130,46 @@ class API:
                             (route_parts[0] == req_parts[0] or route.path == f"/{requested_path}")):
                             found_route = route
                             break
+
             if not found_route:
                 raise Error(404, f"No endpoint found matching '{requested_path}' for help")
-            handler = found_route.handler
-            sig = inspect.signature(found_route.handler)
-            hints = get_type_hints(found_route.handler)
+
+            func_to_inspect = getattr(found_route, 'func', None)
+            if func_to_inspect is None:
+                func_to_inspect = _unwrap(found_route.handler)
+
+            sig = inspect.signature(func_to_inspect)
+            hints = get_type_hints(func_to_inspect)
 
             params_info = {}
             for name, p in sig.parameters.items():
                 if name == 'request':
                     continue
+
+                param_info = {}
+
                 hinted_type = hints.get(name)
                 if hinted_type:
-                    type_str = getattr(hinted_type, '__name__', str(hinted_type))
-                    if hasattr(hinted_type, '__annotations__'):
-                        type_name = getattr(hinted_type, '__name__', 'TypedModel')
-                        params_info[name] = {
-                            'type': 'model',
-                            'class': type_name,
-                            'details': getattr(hinted_type, '__annotations__', {}),
-                        }
-                    else:
-                        params_info[name] = {
-                            'type': type_str,
-                            'default': p.default if p.default is not inspect.Parameter.empty else None
-                        }
+                    param_info['type'] = _name(hinted_type)
                 else:
-                    params_info[name] = {
-                        'type': 'Any',
-                        'default': p.default if p.default is not inspect.Parameter.empty else None
-                    }
-            return_annotation = sig.return_annotation
-            if hasattr(return_annotation, '__name__'):
-                return_type = return_annotation.__name__
-            else:
-                return_type = str(return_annotation)
+                    param_info['type'] = 'Any'
+                if p.default is inspect.Parameter.empty:
+                    param_info['required'] = True
+                else:
+                    param_info['required'] = False
+                    param_info['default'] = p.default
+
+                params_info[name] = param_info
+
             route_help_info = {
                 "method": found_route.method,
                 "path": found_route.path,
                 "name": found_route.name,
                 "middlewares": [m.__class__.__name__ for m in found_route.mids] if found_route.mids else None,
                 "parameters": params_info,
-                "returns": return_type,
-                "description": getattr(found_route.handler, '__doc__', "No description provided"),
+                "description": getattr(func_to_inspect, '__doc__', "No description provided"),
             }
+
             return Response(
                 status="success",
                 code=200,
@@ -389,7 +389,6 @@ class API:
                     router_name=client_ip,
                 )
             else:
-                # Look for message field in response first before falling back to data field
                 message = resp_model.message or resp_model.data
                 if isinstance(message, dict) and "detail" in message:
                     detail = message["detail"]
@@ -511,8 +510,7 @@ class API:
     # ------------------------------------------------------------------
     # Routing
     # ------------------------------------------------------------------
-
-    def include_router(self, router, prefix: Path = ""): 
+    def include_router(self, router, prefix: Path = ""):
         from api.mods.helper import _make_handler
         from api.mods.router import Router as RouterNode
 
@@ -537,6 +535,7 @@ class API:
                     path=full_path,
                     handler=handler,
                     name=node.name,
+                    func=node.func,
                     mids=effective_mids,
                     hint=f"Route: {getattr(node.func, '__name__', repr(node.func))}",
                 )
@@ -548,7 +547,6 @@ class API:
                     parent_path=base_path,
                     inherited_mids=node_mids,
                 )
-
         walk(
             router,
             parent_path=prefix,
@@ -581,6 +579,7 @@ class API:
                 path=path,
                 handler=handler,
                 name=route_name,
+                func=func,
                 mids=effective_mids,
                 hint=f"Endpoint: {func.__name__}"
             )
