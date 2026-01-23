@@ -1,6 +1,6 @@
 import logging
 import json
-from typed import name as _name, model, typed, List, Function, Maybe, Str, Union
+from typed import name as _name, Dict, model, typed, List, Function, Maybe, Str, Union
 from typed.models import MODEL, LAZY_MODEL
 from typed.mods.helper.helper import _unwrap
 from utils.types import Path, Json
@@ -27,7 +27,6 @@ class _RouteEntry:
     func: Maybe(Function)=None
     mids: Maybe(List)
     hint: Str
-
 
 def _match_path(template, path):
     t_parts = [p for p in template.strip("/").split("/") if p] or [""]
@@ -141,6 +140,7 @@ class API:
             sig = inspect.signature(func_to_inspect)
             hints = get_type_hints(func_to_inspect)
 
+            models = {}
             params_info = {}
             for name, p in sig.parameters.items():
                 if name == 'request':
@@ -150,9 +150,27 @@ class API:
 
                 hinted_type = hints.get(name)
                 if hinted_type:
-                    param_info['type'] = _name(hinted_type)
+                    if hinted_type in Union(MODEL, LAZY_MODEL):
+                        param_info['type'] = hinted_type.__name__
+                        attrs = hinted_type.__json__.get("attrs")
+                        attrs_repr = {}
+                        for k, v in attrs.items():
+                            if v in Dict:
+                                new_v = {}
+                                for k2, v2 in v.items():
+                                    if k2 == "type":
+                                        new_v.update({k2: _name(v2)})
+                                    else:
+                                        new_v.update({k2: v2})
+                                attrs_repr.update({k: new_v})
+                            else:
+                                attrs_repr.update({k: v})
+                        models.update({hinted_type.__name__: attrs_repr})
+                    else:
+                        param_info['type'] = _name(hinted_type)
                 else:
                     param_info['type'] = 'Any'
+
                 if p.default is inspect.Parameter.empty:
                     param_info['required'] = True
                 else:
@@ -165,10 +183,13 @@ class API:
                 "method": found_route.method,
                 "path": found_route.path,
                 "name": found_route.name,
-                "middlewares": [m.__class__.__name__ for m in found_route.mids] if found_route.mids else None,
-                "parameters": params_info,
-                "description": getattr(func_to_inspect, '__doc__', "No description provided"),
+                "mids": [m.__class__.__name__ for m in found_route.mids] if found_route.mids else None,
+                "params": params_info,
+                "desc": getattr(func_to_inspect, '__doc__', "No description provided"),
             }
+
+            if models:
+                route_help_info.update({"models": models})
 
             return Response(
                 status="success",
