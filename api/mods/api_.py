@@ -45,7 +45,6 @@ def _match_path(template, path):
             return None
     return params
 
-
 class API:
     def __init__(self, name="api", log_level='DEBUG', mids=None):
         try:
@@ -92,6 +91,7 @@ class API:
                     })
             return Response(
                 status="success",
+                success=True,
                 code=200,
                 data=endpoints,
                 message="Main helper endpoint. For help with specific endpoints, try '/help/<endpoint>'"
@@ -193,6 +193,7 @@ class API:
 
             return Response(
                 status="success",
+                success=True,
                 code=200,
                 data=route_help_info,
                 message=f"Detailed help for endpoint '{found_route.name}'"
@@ -259,6 +260,7 @@ class API:
                 )
                 resp_model = Response(
                     status="failure",
+                    success=False,
                     code=e.status_code,
                     data=e.detail if e.detail in Json else None,
                     message=e.detail if e.detail in Str else None
@@ -303,23 +305,26 @@ class API:
                     except Error as block_exc:
                         resp_model = Response(
                             status="failure",
+                            success=False,
                             code=block_exc.status_code,
-                            data=block_exc.detail if block_exc.detail in Json else None,
-                            message=block_exc.detail if block_exc.detail in Str else None,
+                            data=None,
+                            message=str(block_exc.detail)
                         )
                     else:
                         resp_model = Response(
                             status="failure",
+                            success=False,
                             code=exc.status_code,
-                            data=exc.detail if exc.detail in Json else None,
-                            message=exc.detail if exc.detail in Str else None,
+                            data=None,
+                            message=str(exc.detail),
                         )
                 else:
                     resp_model = Response(
                         status="failure",
+                        success=False,
                         code=exc.status_code,
-                        data=exc.detail if exc.detail in Json else None,
-                        message=exc.detail if exc.detail in Str else None,
+                        data=None,
+                        message=str(exc.detail),
                     )
 
             except TypeError as exc:
@@ -336,12 +341,13 @@ class API:
                         resp_model = Response(
                             status="failure",
                             code=block_exc.status_code,
-                            data=block_exc.detail if block_exc.detail in Json else None,
-                            message=block_exc.detail if block_exc.detail in Str else None,
+                            data=None,
+                            message=str(block_exc.detail),
                         )
                     else:
                         resp_model = Response(
                             status="failure",
+                            success=False,
                             code=422,
                             data=None,
                             message=str(exc).strip(),
@@ -349,9 +355,10 @@ class API:
                 else:
                     resp_model = Response(
                         status="failure",
+                        success=False,
                         code=422,
-                        data=exc if exc in Json else None,
-                        message=exc if exc in Str else None,
+                        data=None,
+                        message=str(exc),
                     )
 
             except Exception as exc:
@@ -574,12 +581,12 @@ class API:
             typed_func = typed(func, lazy=False)
             if typed_func.cod is not Response:
                 raise TypeError(
-                    "..."
+                    "TBA <some message here>"
                 )
             if method.upper() in ('POST', 'PUT', 'PATCH'):
                 if len(typed_func.dom) != 1 or not typed_func.dom[0] in Union(MODEL, LAZY_MODEL):
                     raise TypeError(
-                        "aaaaaa"
+                        "TBA <some message here>"
                     )
 
             handler = _make_handler(func, method, mids=effective_mids)

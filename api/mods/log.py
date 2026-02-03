@@ -1,5 +1,6 @@
 import logging
 import inspect
+from utils.general import message as _message
 
 ROUTER_COL_WIDTH = 11
 LOGGER_NAME = "api"
@@ -79,36 +80,37 @@ class Logger:
             return None
         return None
 
-    def _log(self, level, message, router_name=None, *args, **kwargs):
+    def _log(self, level, message, router_name=None, **kwargs):
         try:
             logger = _get_app_logger()
             router = router_name or self._caller_router_name()
             prefix = _build_prefix(router)
-            logger.log(level, prefix + message, *args, **kwargs)
+            message = _message(message=message, **kwargs)
+            logger.log(level, prefix + message)
         except Exception:
             pass
 
-    def debug(self, message, *args, **kwargs):
-        self._log(logging.DEBUG, message, *args, **kwargs)
+    def debug(self, message, **kwargs):
+        self._log(logging.DEBUG, message, **kwargs)
 
-    def info(self, message, *args, **kwargs):
-        self._log(logging.INFO, message, *args, **kwargs)
+    def info(self, message, **kwargs):
+        self._log(logging.INFO, message, **kwargs)
 
-    def warning(self, message, *args, **kwargs):
-        self._log(logging.WARNING, message, *args, **kwargs)
+    def warning(self, message, **kwargs):
+        self._log(logging.WARNING, message, **kwargs)
 
     warn = warning
 
-    def error(self, message, *args, **kwargs):
-        self._log(logging.ERROR, message, *args, **kwargs)
+    def error(self, message, **kwargs):
+        self._log(logging.ERROR, message, **kwargs)
 
     err = error
 
-    def critical(self, message, *args, **kwargs):
-        self._log(logging.CRITICAL, message, *args, **kwargs)
+    def critical(self, message, **kwargs):
+        self._log(logging.CRITICAL, message, **kwargs)
 
-    def client(self, message, *args, **kwargs):
+    def client(self, message, **kwargs):
         router_name = kwargs.pop("router_name", None)
-        self._log(CLIENT_LEVEL, message, router_name=router_name, *args, **kwargs)
+        self._log(CLIENT_LEVEL, message, router_name=router_name, **kwargs)
 
 log = Logger()
