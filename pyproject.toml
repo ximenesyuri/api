@@ -9,7 +9,7 @@ authors = [
     {name = "Yuri Ximenes", email = "ximenesyuri@gmx.ie"},
 ]
 dependencies = [
-    "typed @ git+https://github.com/ximenesyuri/typed",
+    "typedsystem @ git+https://github.com/ximenesyuri/typed",
     "utils @ git+https://github.com/ximenesyuri/utils",
     "system @ git+https://github.com/ximenesyuri/system"
 ]
