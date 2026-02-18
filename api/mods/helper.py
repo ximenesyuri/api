@@ -9,8 +9,7 @@ from urllib.parse import parse_qs
 from http.cookies import SimpleCookie
 from typing import get_type_hints
 
-from typed import Any, TYPE, Str, Dict, List, Nill
-from utils.types import Json
+from typed import Any, TYPE, Str, Dict, List, Set, Nill
 from typed.mods.helper.helper import (
     _hinted_domain,
     _hinted_codomain,
@@ -246,14 +245,23 @@ def _want_body_for(param_name, ann):
         return False
     if getattr(ann, "is_model", False):
         return True
-    if ann <= Json or ann <= List or ann <= Dict:
+    if ann <= Set or ann <= List or ann <= Dict:
         return True
     return False
 
 
 async def _build_kwargs(func, request):
-    sig = inspect.signature(func)
-    hints = get_type_hints(func)
+    # Unwrap any typed/handler wrappers to get the original Python function
+    target = _unwrap(func)
+
+    sig = inspect.signature(target)
+    try:
+        hints = get_type_hints(target)
+    except TypeError:
+        # Fallback if typing.get_type_hints doesn't accept the object
+        hints = getattr(target, "__annotations__", {}) or {}
+    except Exception:
+        hints = getattr(target, "__annotations__", {}) or {}
 
     params = sig.parameters
     path_params = request.path_params or {}
@@ -264,6 +272,12 @@ async def _build_kwargs(func, request):
     body_value: Any = None
 
     kw = {}
+
+    # helper for nice type names
+    try:
+        from typed import name as _type_name
+    except Exception:
+        _type_name = lambda x: str(x)
 
     for name, p in params.items():
         if name == "request":
@@ -297,7 +311,7 @@ async def _build_kwargs(func, request):
             kw[name] = _parse_literal(v)
             continue
 
-        # Body
+        # Body (JSON / text)
         if _want_body_for(name, ann):
             if not body_loaded:
                 body_loaded = True
@@ -321,10 +335,15 @@ async def _build_kwargs(func, request):
         if p.default is not inspect._empty:
             kw[name] = p.default
         else:
-            # Validation-like error
+            # Missing required parameter -> explicit API Error with type info
+            if ann is not None:
+                type_str = _type_name(ann)
+            else:
+                type_str = "Any"
+
             raise Error(
                 status_code=422,
-                detail=f"Missing required parameter '{name}'",
+                detail=f"missing required parameter '{name}' of type '{type_str}'",
             )
 
     return kw
