@@ -1,4 +1,4 @@
-from typed import model, Maybe
+from typed import model, Maybe, Dict
 from typed.models import value
 from utils.types import Nat
 from system import Message, Handler
@@ -6,6 +6,7 @@ from api.mods.log import log
 
 @model
 class Response(Message):
+    raw:  Maybe(Dict)=None
     code: Maybe(Nat)=(
         lambda:
             200 if value('status') == 'success' else

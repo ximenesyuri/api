@@ -251,7 +251,6 @@ def _want_body_for(param_name, ann):
 
 
 async def _build_kwargs(func, request):
-    # Unwrap any typed/handler wrappers to get the original Python function
     target = _unwrap(func)
 
     sig = inspect.signature(target)
