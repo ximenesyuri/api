@@ -454,15 +454,19 @@ class API(System):
 
     async def _send_response(self, send, resp: Response) -> None:
         try:
-            payload = getattr(resp, "__json__", None)
-            if payload is None:
-                payload = {
-                    "status": resp.status,
-                    "success": resp.success,
-                    "code": resp.code,
-                    "data": resp.data,
-                    "message": resp.message,
-                }
+            raw_payload = getattr(resp, "raw", None)
+            if raw_payload is not None:
+                payload = raw_payload
+            else:
+                payload = getattr(resp, "__json__", None)
+                if payload is None:
+                    payload = {
+                        "status": resp.status,
+                        "success": resp.success,
+                        "code": resp.code,
+                        "data": resp.data,
+                        "message": resp.message,
+                    }
         except Exception:
             payload = {
                 "status": getattr(resp, "status", "failure"),
