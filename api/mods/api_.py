@@ -4,7 +4,7 @@ import inspect
 from typing import get_type_hints
 from typed import name as _name, Dict, Str, Union
 from typed.models import MODEL, LAZY_MODEL
-from typed.mods.helper.helper import _unwrap
+from typed.mods.helper.func import _unwrap
 from api.mods.helper import (
     _set_api_name,
     _enforce_ip_block,

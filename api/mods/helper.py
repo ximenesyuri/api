@@ -10,7 +10,7 @@ from http.cookies import SimpleCookie
 from typing import get_type_hints
 
 from typed import Any, TYPE, Str, Dict, List, Set, Nill
-from typed.mods.helper.helper import (
+from typed.mods.helper.func import (
     _hinted_domain,
     _hinted_codomain,
     _check_domain,
