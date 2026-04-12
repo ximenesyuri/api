@@ -2,23 +2,27 @@ import logging
 import json
 import inspect
 from typing import get_type_hints
+
 from typed import name as _name, Dict, Str, Union
 from typed.models import MODEL, LAZY_MODEL
 from typed.mods.helper.func import _unwrap
+
 from api.mods.helper import (
     _set_api_name,
     _enforce_ip_block,
     _enforce_token_auth,
     _enforce_rate_limit,
+    _enforce_cors,
     Error,
     Request,
-    _build_kwargs
+    _build_kwargs,
 )
 from api.mods.log import log
 from system import System
 from system.mods.handler import HandlerInfo
 from api.mods.router import Router
 from api.mods.handler import Response, route, GET, POST, PUT, PATCH, DELETE
+
 
 def _match_path_segments(template_segs, path_segs):
     """Match ('users', '{id}') against ('users', '123') -> params dict or None."""
@@ -34,8 +38,9 @@ def _match_path_segments(template_segs, path_segs):
             return None
     return params
 
+
 class API(System):
-    def __init__(self, name="api", log_level='DEBUG', mids=None, desc=""):
+    def __init__(self, name="api", log_level="DEBUG", mids=None, desc=""):
         super().__init__(name=name, desc=desc or "")
 
         try:
@@ -48,13 +53,14 @@ class API(System):
         self.mids = mids
 
         from api.mods.log import _get_app_logger
+
         self._logger = _get_app_logger()
         log_levels = {
-            'DEBUG':    logging.DEBUG,
-            'INFO':     logging.INFO,
-            'WARNING':  logging.WARNING,
-            'ERROR':    logging.ERROR,
-            'CRITICAL': logging.CRITICAL,
+            "DEBUG": logging.DEBUG,
+            "INFO": logging.INFO,
+            "WARNING": logging.WARNING,
+            "ERROR": logging.ERROR,
+            "CRITICAL": logging.CRITICAL,
         }
         self._logger.setLevel(log_levels.get(log_level.upper(), logging.INFO))
 
@@ -79,7 +85,15 @@ class API(System):
                 continue
 
             if kind == "route":
-                allowed_methods = {"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"}
+                allowed_methods = {
+                    "GET",
+                    "POST",
+                    "PUT",
+                    "PATCH",
+                    "DELETE",
+                    "HEAD",
+                    "OPTIONS",
+                }
             else:
                 allowed_methods = {kind.upper()}
 
@@ -107,18 +121,27 @@ class API(System):
                 if path == "/help" or path.startswith("/help/"):
                     continue
                 kind = str(info.meta.get("kind", "")).upper()
-                method = kind if kind in ("GET", "POST", "PUT", "PATCH", "DELETE") else "GET"
-                endpoints.append({
-                    "method": method,
-                    "path": path,
-                    "name": info.name,
-                })
+                method = (
+                    kind
+                    if kind in ("GET", "POST", "PUT", "PATCH", "DELETE")
+                    else "GET"
+                )
+                endpoints.append(
+                    {
+                        "method": method,
+                        "path": path,
+                        "name": info.name,
+                    }
+                )
             return Response(
                 status="success",
                 success=True,
                 code=200,
                 data=endpoints,
-                message="Main helper endpoint. For help with specific endpoints, try '/help/<endpoint>'",
+                message=(
+                    "Main helper endpoint. For help with specific endpoints, "
+                    "try '/help/<endpoint>'"
+                ),
             )
 
         @self.GET("/help/{endpoint}", name="help_detail")
@@ -142,7 +165,9 @@ class API(System):
                     break
 
             if target is None:
-                raise Error(404, f"No endpoint found matching '{requested_path}' for help")
+                raise Error(
+                    404, f"No endpoint found matching '{requested_path}' for help"
+                )
 
             func_to_inspect = _unwrap(target.func)
             sig = inspect.signature(func_to_inspect)
@@ -242,6 +267,16 @@ class API(System):
             else:
                 more_body = False
 
+        dummy_request = Request(
+            method=method,
+            path=path,
+            query_string=query_string,
+            headers=headers,
+            path_params={},
+            body=body,
+            client=client,
+        )
+
         try:
             info, route_params = self._find_matching_handler(method, path)
         except Error as e:
@@ -254,9 +289,13 @@ class API(System):
                 success=False,
                 code=e.status_code,
                 data=None,
-                message=str(e.detail)
+                message=str(e.detail),
             )
-            await self._send_response(send, resp_model)
+            effective_mids = self.mids
+            cors_mid, origin, is_preflight, cors_headers = _enforce_cors(
+                scope, dummy_request, effective_mids
+            )
+            await self._send_response(send, resp_model, extra_headers=cors_headers)
             return
 
         request = Request(
@@ -269,8 +308,25 @@ class API(System):
             client=client,
         )
 
-        path_is_help = ("/" + "/".join(info.path) if info.path else "/").startswith("/help")
+        path_is_help = (
+            "/" + "/".join(info.path) if info.path else "/"
+        ).startswith("/help")
         effective_mids = info.meta.get("mids") or self.mids
+
+        cors_mid, origin, is_preflight, cors_headers = _enforce_cors(
+            scope, request, effective_mids
+        )
+
+        if is_preflight:
+            preflight_resp = Response(
+                status="success",
+                success=True,
+                code=204,
+                data=None,
+                message=None,
+            )
+            await self._send_response(send, preflight_resp, extra_headers=cors_headers)
+            return
 
         try:
             if not path_is_help and effective_mids:
@@ -358,7 +414,9 @@ class API(System):
                 f"Unhandled error on {method} {path_for_log}: {exc}",
                 router_name=self.name,
             )
-            detail = str(exc) if getattr(self, "_debug", False) else "Internal Server Error"
+            detail = (
+                str(exc) if getattr(self, "_debug", False) else "Internal Server Error"
+            )
             log.client(
                 f"Error 500: {method} {path_for_log} -> {detail}",
                 router_name=client_ip,
@@ -374,7 +432,9 @@ class API(System):
                         success=False,
                         code=block_exc.status_code,
                         data=None,
-                        message=str(block_exc.detail) if block_exc.detail else None,
+                        message=str(block_exc.detail)
+                        if block_exc.detail
+                        else None,
                     )
                 else:
                     resp_model = Response(
@@ -411,7 +471,7 @@ class API(System):
                     router_name=client_ip,
                 )
 
-        await self._send_response(send, resp_model)
+        await self._send_response(send, resp_model, extra_headers=cors_headers)
 
     def __call__(self, *args, **kwargs):
         if len(args) == 3 and not kwargs and isinstance(args[0], dict):
@@ -427,32 +487,22 @@ class API(System):
 
         if hasattr(result, "__json__"):
             data = getattr(result, "__json__")
-            return Response(
-                status="success",
-                success=True,
-                code=200,
-                data=data
-            )
+            return Response(status="success", success=True, code=200, data=data)
 
         try:
             json.dumps(result)
             data = result
-            return Response(
-                status="success",
-                success=True,
-                code=200,
-                data=data
-            )
+            return Response(status="success", success=True, code=200, data=data)
         except TypeError:
             if result in Str:
                 return Response(
-                    status="success",
-                    success=True,
-                    code=200,
-                    message=result
+                    status="success", success=True, code=200, message=result
                 )
 
-    async def _send_response(self, send, resp: Response) -> None:
+    async def _send_response(self, send, resp: Response, extra_headers=None) -> None:
+        if extra_headers is None:
+            extra_headers = []
+
         try:
             raw_payload = getattr(resp, "raw", None)
             if raw_payload is not None:
@@ -481,6 +531,8 @@ class API(System):
             (b"content-length", str(len(body_bytes)).encode("ascii")),
         ]
 
+        headers.extend(extra_headers)
+
         await send(
             {
                 "type": "http.response.start",
@@ -500,7 +552,7 @@ class API(System):
         self,
         host="127.0.0.1",
         port=8000,
-        log_level='debug',
+        log_level="debug",
         app_import_string=None,
         **kwargs,
     ):
@@ -519,12 +571,13 @@ class API(System):
 
         run_builtin(self, host=host, port=port)
 
-API.attach(handler=route,  name='route')
-API.attach(handler=GET,    name='GET')
-API.attach(handler=POST,   name='POST')
-API.attach(handler=PUT,    name='PUT')
-API.attach(handler=PATCH,  name='PATCH')
-API.attach(handler=DELETE, name='DELETE')
+
+API.attach(handler=route, name="route")
+API.attach(handler=GET, name="GET")
+API.attach(handler=POST, name="POST")
+API.attach(handler=PUT, name="PUT")
+API.attach(handler=PATCH, name="PATCH")
+API.attach(handler=DELETE, name="DELETE")
 
 API.allow(Router)
 

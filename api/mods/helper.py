@@ -28,7 +28,6 @@ def _set_api_name(name):
     global _api_name
     _api_name = name
 
-
 def _get_router_class():
     global _ROUTER_CLASS
     if _ROUTER_CLASS is None:
@@ -257,7 +256,6 @@ async def _build_kwargs(func, request):
     try:
         hints = get_type_hints(target)
     except TypeError:
-        # Fallback if typing.get_type_hints doesn't accept the object
         hints = getattr(target, "__annotations__", {}) or {}
     except Exception:
         hints = getattr(target, "__annotations__", {}) or {}
@@ -272,7 +270,6 @@ async def _build_kwargs(func, request):
 
     kw = {}
 
-    # helper for nice type names
     try:
         from typed import name as _type_name
     except Exception:
@@ -330,11 +327,9 @@ async def _build_kwargs(func, request):
                 kw[name] = body_value
             continue
 
-        # Default or required
         if p.default is not inspect._empty:
             kw[name] = p.default
         else:
-            # Missing required parameter -> explicit API Error with type info
             if ann is not None:
                 type_str = _type_name(ann)
             else:
@@ -348,7 +343,7 @@ async def _build_kwargs(func, request):
     return kw
 
 # -------------------------------------
-# Middlewares (IP block, token auth)
+# Middlewares (block, token, limit, cors)
 # -------------------------------------
 def _enforce_ip_block(request, mids, status_code=None):
     from api.mods.mids import Block
@@ -365,7 +360,6 @@ def _enforce_ip_block(request, mids, status_code=None):
     if block_mid is None:
         return
 
-    # Determine client IP
     client = getattr(request, "client", None)
     if isinstance(client, tuple) and client:
         ip = client[0]
@@ -538,6 +532,52 @@ def _enforce_rate_limit(request, mids):
             detail=limit_mid.message,
         )
 
+def _enforce_cors(scope, request, mids):
+    from api.mods.mids import Cors
+
+    if not mids:
+        return None, None, False, []
+
+    cors_mid = None
+    for m in mids:
+        if isinstance(m, Cors):
+            cors_mid = m
+            break
+
+    if cors_mid is None:
+        return None, None, False, []
+
+    headers = request.headers
+    origin = headers.get("origin")
+    request_method = headers.get("access-control-request-method")
+
+    is_preflight = request.method == "OPTIONS" and bool(origin) and bool(request_method)
+
+    allowed_origins = cors_mid.origins or ["*"]
+    origin_allowed = "*" in allowed_origins or (origin and origin in allowed_origins)
+
+    cors_headers = []
+
+    if origin and origin_allowed:
+        cors_headers.append((b"access-control-allow-origin", origin.encode("utf-8")))
+        if cors_mid.allow_credentials:
+            cors_headers.append((b"access-control-allow-credentials", b"true"))
+    else:
+        return cors_mid, origin, is_preflight, []
+
+    allow_methods = ", ".join(cors_mid.allow_methods or ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"])
+    cors_headers.append((b"access-control-allow-methods", allow_methods.encode("utf-8")))
+
+    if cors_mid.allow_headers:
+        allow_headers = ", ".join(cors_mid.allow_headers)
+        cors_headers.append((b"access-control-allow-headers", allow_headers.encode("utf-8")))
+
+    if cors_mid.expose_headers:
+        expose = ", ".join(cors_mid.expose_headers)
+        cors_headers.append((b"access-control-expose-headers", expose.encode("utf-8")))
+
+    return cors_mid, origin, is_preflight, cors_headers
+
 
 # ------------------------
 # Handler factory
@@ -640,4 +680,3 @@ def _import_string(self) -> str:
         module_path = rel_mod
 
     return f"{module_path}:{var_name}"
-

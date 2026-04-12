@@ -77,7 +77,6 @@ class BuiltinHTTPServer:
                 )
                 headers_dict[name.lower()] = value
 
-            # ---- Read body (Content-Length only) ----
             body = b""
             if "content-length" in headers_dict:
                 try:
@@ -90,7 +89,6 @@ class BuiltinHTTPServer:
                 if length > 0:
                     body = await reader.readexactly(length)
 
-            # ---- Build ASGI scope ----
             client_addr = writer.get_extra_info("peername")
             server_addr = writer.get_extra_info("sockname")
 
